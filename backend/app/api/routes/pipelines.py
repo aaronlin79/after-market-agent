@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -15,7 +17,7 @@ router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
 
 @router.post("/news/run")
-def run_news_pipeline(db: Session = Depends(get_db)) -> dict[str, int]:
+def run_news_pipeline(db: Session = Depends(get_db)) -> dict[str, Any]:
     """Manually trigger the news ingestion pipeline."""
 
     return run_news_ingestion(db)

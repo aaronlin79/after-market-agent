@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.models import WatchlistSymbol
 from backend.app.services.clustering.clustering_service import cluster_articles
+from backend.app.services.digest.digest_service import generate_morning_digest
 from backend.app.services.news.adapters.base import BaseNewsAdapter
 from backend.app.services.news.news_ingestion_service import ingest_news
 from backend.app.services.ranking.ranking_service import rank_clusters
@@ -21,7 +23,10 @@ logger = logging.getLogger(__name__)
 def run_news_ingestion(
     db: Session,
     adapter: BaseNewsAdapter | None = None,
-) -> dict[str, int]:
+    *,
+    generate_digest: bool = False,
+    digest_watchlist_id: int | None = None,
+) -> dict[str, Any]:
     """Run the news ingestion pipeline for all watchlist symbols."""
 
     symbols = list(
@@ -43,10 +48,23 @@ def run_news_ingestion(
     clustering_stats = cluster_articles(db)
     summary_stats = generate_cluster_summaries(db)
     ranking_stats = rank_clusters(db)
+    digest_generated = False
+    digest_id: int | None = None
+    surfaced_item_count = 0
+
+    if generate_digest and digest_watchlist_id is not None:
+        digest_result = generate_morning_digest(db, digest_watchlist_id)
+        digest_generated = True
+        digest_id = digest_result["digest_id"]
+        surfaced_item_count = digest_result["surfaced_item_count"]
+
     return {
         **ingestion_stats,
         "cluster_count": clustering_stats["cluster_count"],
         "representative_count": clustering_stats["representative_count"],
         "summaries_generated": summary_stats["summaries_generated"],
         "ranked_count": ranking_stats["ranked_count"],
+        "digest_generated": digest_generated,
+        "digest_id": digest_id,
+        "surfaced_item_count": surfaced_item_count,
     }
