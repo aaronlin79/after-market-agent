@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.app.models import SourceItem
+from backend.app.models import SourceItem, StoryCluster
 from backend.app.services.clustering.similarity import cosine_similarity
 from backend.app.services.embeddings.embedding_service import generate_embedding
 
@@ -85,6 +85,13 @@ def cluster_articles(
             article.cluster_id = cluster_identifier
             article.is_representative = article.id == representative.id
 
+        _sync_story_cluster(
+            db=db,
+            cluster_id=cluster_identifier,
+            articles=cluster_articles_list,
+            representative=representative,
+        )
+
     db.commit()
 
     cluster_count = len(grouped_articles)
@@ -135,3 +142,55 @@ def _union(parent: dict[int, int], left_id: int, right_id: int) -> None:
         parent[right_root] = left_root
     else:
         parent[left_root] = right_root
+
+
+def _sync_story_cluster(
+    db: Session,
+    cluster_id: str,
+    articles: list[SourceItem],
+    representative: SourceItem,
+) -> None:
+    """Create or update the StoryCluster row for a grouped article set."""
+
+    story_cluster = db.execute(
+        select(StoryCluster).where(StoryCluster.cluster_key == cluster_id)
+    ).scalar_one_or_none()
+    if story_cluster is None:
+        story_cluster = StoryCluster(
+            cluster_key=cluster_id,
+            representative_title=representative.title,
+            primary_symbol=_select_primary_symbol(articles),
+            event_type="other",
+            importance_score=0.0,
+            novelty_score=0.0,
+            credibility_score=0.0,
+            confidence="low",
+            first_seen_at=min(article.published_at for article in articles),
+            last_seen_at=max(article.published_at for article in articles),
+        )
+        db.add(story_cluster)
+        return
+
+    story_cluster.representative_title = representative.title
+    story_cluster.primary_symbol = _select_primary_symbol(articles)
+    story_cluster.first_seen_at = min(article.published_at for article in articles)
+    story_cluster.last_seen_at = max(article.published_at for article in articles)
+
+
+def _select_primary_symbol(articles: list[SourceItem]) -> str:
+    """Choose a primary symbol from article metadata when available."""
+
+    symbol_counts: dict[str, int] = {}
+    for article in articles:
+        metadata = article.metadata_json or {}
+        metadata_symbols = metadata.get("symbols", [])
+        if isinstance(metadata_symbols, list):
+            for value in metadata_symbols:
+                symbol = str(value).strip().upper()
+                if symbol:
+                    symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
+
+    if not symbol_counts:
+        return "UNKNOWN"
+
+    return min(symbol_counts.items(), key=lambda item: (-item[1], item[0]))[0]

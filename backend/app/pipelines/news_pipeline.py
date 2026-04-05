@@ -12,6 +12,7 @@ from backend.app.models import WatchlistSymbol
 from backend.app.services.clustering.clustering_service import cluster_articles
 from backend.app.services.news.adapters.base import BaseNewsAdapter
 from backend.app.services.news.news_ingestion_service import ingest_news
+from backend.app.services.ranking.ranking_service import rank_clusters
 from backend.app.services.summarization.cluster_summary_service import generate_cluster_summaries
 
 logger = logging.getLogger(__name__)
@@ -41,9 +42,11 @@ def run_news_ingestion(
     )
     clustering_stats = cluster_articles(db)
     summary_stats = generate_cluster_summaries(db)
+    ranking_stats = rank_clusters(db)
     return {
         **ingestion_stats,
         "cluster_count": clustering_stats["cluster_count"],
         "representative_count": clustering_stats["representative_count"],
         "summaries_generated": summary_stats["summaries_generated"],
+        "ranked_count": ranking_stats["ranked_count"],
     }

@@ -231,6 +231,7 @@ def test_news_pipeline_endpoint_runs(client: TestClient) -> None:
     assert payload["cluster_count"] >= 1
     assert payload["representative_count"] == payload["cluster_count"]
     assert payload["summaries_generated"] >= 1
+    assert payload["ranked_count"] >= 1
 
 
 def test_news_cluster_endpoint_runs(client: TestClient) -> None:
