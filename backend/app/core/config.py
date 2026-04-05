@@ -18,6 +18,7 @@ class Settings(BaseModel):
     environment: str = Field(default="development")
     database_url: str = Field(default="postgresql://postgres:postgres@localhost:5432/after_market_agent")
     debug: bool = Field(default=False)
+    default_watchlist_name: str = Field(default="Default Watchlist")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -28,6 +29,10 @@ class Settings(BaseModel):
             environment=getenv("ENVIRONMENT", cls.model_fields["environment"].default),
             database_url=getenv("DATABASE_URL", cls.model_fields["database_url"].default),
             debug=getenv("DEBUG", str(cls.model_fields["debug"].default)).lower() in {"1", "true", "yes", "on"},
+            default_watchlist_name=getenv(
+                "DEFAULT_WATCHLIST_NAME",
+                cls.model_fields["default_watchlist_name"].default,
+            ),
         )
 
 

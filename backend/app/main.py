@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 
 from backend.app.api.routes.health import router as health_router
+from backend.app.api.routes.watchlists import router as watchlists_router
 from backend.app.core.config import get_settings
 
 settings = get_settings()
@@ -14,3 +15,4 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
+app.include_router(watchlists_router)
