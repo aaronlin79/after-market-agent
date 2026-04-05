@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.pipelines import router as pipelines_router
+from backend.app.api.routes.summaries import router as summaries_router
 from backend.app.api.routes.watchlists import router as watchlists_router
 from backend.app.core.config import get_settings
 
@@ -17,4 +18,5 @@ app = FastAPI(
 
 app.include_router(health_router)
 app.include_router(pipelines_router)
+app.include_router(summaries_router)
 app.include_router(watchlists_router)
