@@ -211,7 +211,11 @@ def test_pipeline_returns_expected_counts(db_session: Session) -> None:
 
     stats = run_news_ingestion(db_session, adapter=DuplicateNewsAdapter())
 
-    assert stats == {"fetched_count": 2, "inserted_count": 1, "skipped_duplicates": 1}
+    assert stats["fetched_count"] == 2
+    assert stats["inserted_count"] == 1
+    assert stats["skipped_duplicates"] == 1
+    assert stats["cluster_count"] == 1
+    assert stats["representative_count"] == 1
 
 
 def test_news_pipeline_endpoint_runs(client: TestClient) -> None:
@@ -224,3 +228,19 @@ def test_news_pipeline_endpoint_runs(client: TestClient) -> None:
     assert payload["fetched_count"] >= 1
     assert payload["inserted_count"] >= 1
     assert payload["skipped_duplicates"] >= 0
+    assert payload["cluster_count"] >= 1
+    assert payload["representative_count"] == payload["cluster_count"]
+
+
+def test_news_cluster_endpoint_runs(client: TestClient) -> None:
+    """Manual clustering endpoint should return clustering stats."""
+
+    client.post("/pipelines/news/run")
+
+    response = client.post("/pipelines/news/cluster")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["article_count"] >= 1
+    assert payload["cluster_count"] >= 1
+    assert payload["representative_count"] == payload["cluster_count"]

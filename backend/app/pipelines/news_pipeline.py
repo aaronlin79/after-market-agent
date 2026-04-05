@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.models import WatchlistSymbol
+from backend.app.services.clustering.clustering_service import cluster_articles
 from backend.app.services.news.adapters.base import BaseNewsAdapter
 from backend.app.services.news.news_ingestion_service import ingest_news
 
@@ -30,10 +31,16 @@ def run_news_ingestion(
     end_time = datetime.now(UTC)
     start_time = end_time - timedelta(hours=24)
 
-    return ingest_news(
+    ingestion_stats = ingest_news(
         db=db,
         symbols=unique_symbols,
         start_time=start_time,
         end_time=end_time,
         adapter=adapter,
     )
+    clustering_stats = cluster_articles(db)
+    return {
+        **ingestion_stats,
+        "cluster_count": clustering_stats["cluster_count"],
+        "representative_count": clustering_stats["representative_count"],
+    }
