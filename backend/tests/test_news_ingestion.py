@@ -186,8 +186,14 @@ def test_duplicate_items_are_not_inserted_twice(db_session: Session) -> None:
     )
 
     count = db_session.execute(select(func.count(SourceItem.id))).scalar_one()
-    assert first_run == {"fetched_count": 2, "inserted_count": 1, "skipped_duplicates": 1}
-    assert second_run == {"fetched_count": 2, "inserted_count": 0, "skipped_duplicates": 2}
+    assert first_run["provider_used"] == "duplicate"
+    assert first_run["fetched_count"] == 2
+    assert first_run["inserted_count"] == 1
+    assert first_run["skipped_duplicates"] == 1
+    assert second_run["provider_used"] == "duplicate"
+    assert second_run["fetched_count"] == 2
+    assert second_run["inserted_count"] == 0
+    assert second_run["skipped_duplicates"] == 2
     assert count == 1
 
 
@@ -214,6 +220,7 @@ def test_pipeline_returns_expected_counts(db_session: Session) -> None:
     assert stats["fetched_count"] == 2
     assert stats["inserted_count"] == 1
     assert stats["skipped_duplicates"] == 1
+    assert stats["provider_used"] == "duplicate"
     assert stats["cluster_count"] == 1
     assert stats["representative_count"] == 1
 
@@ -228,6 +235,7 @@ def test_news_pipeline_endpoint_runs(client: TestClient) -> None:
     assert payload["fetched_count"] >= 1
     assert payload["inserted_count"] >= 1
     assert payload["skipped_duplicates"] >= 0
+    assert payload["provider_used"] in {"mock", "finnhub", "duplicate"}
     assert payload["cluster_count"] >= 1
     assert payload["representative_count"] == payload["cluster_count"]
     assert payload["summaries_generated"] >= 1

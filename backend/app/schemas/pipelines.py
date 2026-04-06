@@ -7,6 +7,12 @@ from typing import Literal
 from pydantic import BaseModel
 
 
+class WatchlistPipelineRequest(BaseModel):
+    """Optional watchlist selection for manual pipeline runs."""
+
+    watchlist_id: int | None = None
+
+
 class NewsSummarizationResponse(BaseModel):
     """Response payload for manual cluster summarization runs."""
 
@@ -38,3 +44,29 @@ class NewsPipelineRunResponse(BaseModel):
     digest_generated: bool
     digest_id: int | None
     surfaced_item_count: int
+    provider_used: str
+
+
+class SecIngestionResponse(BaseModel):
+    """Response payload for SEC-only ingestion."""
+
+    watchlist_id: int | None
+    provider_used: Literal["sec"]
+    mapped_symbol_count: int
+    fetched_count: int
+    inserted_count: int
+    skipped_duplicates: int
+
+
+class FullIngestionResponse(BaseModel):
+    """Response payload for combined news and SEC ingestion."""
+
+    watchlist_id: int | None
+    provider_used: str
+    news_fetched_count: int
+    news_inserted_count: int
+    filing_fetched_count: int
+    filing_inserted_count: int
+    skipped_duplicates: int
+    news_error: str | None
+    sec_error: str | None

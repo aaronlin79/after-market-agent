@@ -9,12 +9,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.app.core.config import Settings, get_settings
 from backend.app.models import WatchlistSymbol
 from backend.app.services.clustering.clustering_service import cluster_articles
 from backend.app.services.digest.digest_service import generate_morning_digest
 from backend.app.services.news.adapters.base import BaseNewsAdapter
 from backend.app.services.news.news_ingestion_service import ingest_news
 from backend.app.services.ranking.ranking_service import rank_clusters
+from backend.app.services.sec.sec_ingestion_service import get_watchlist_symbols, ingest_sec_filings
 from backend.app.services.summarization.cluster_summary_service import generate_cluster_summaries
 
 logger = logging.getLogger(__name__)
@@ -26,9 +28,11 @@ def run_news_ingestion(
     *,
     generate_digest: bool = False,
     digest_watchlist_id: int | None = None,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
     """Run the news ingestion pipeline for all watchlist symbols."""
 
+    resolved_settings = settings or get_settings()
     symbols = list(
         db.execute(select(WatchlistSymbol.symbol).order_by(WatchlistSymbol.symbol.asc())).scalars().all()
     )
@@ -36,7 +40,7 @@ def run_news_ingestion(
     logger.info("Running news pipeline for symbols: %s", unique_symbols)
 
     end_time = datetime.now(UTC)
-    start_time = end_time - timedelta(hours=24)
+    start_time = end_time - timedelta(hours=resolved_settings.ingestion_lookback_hours)
 
     ingestion_stats = ingest_news(
         db=db,
@@ -44,6 +48,7 @@ def run_news_ingestion(
         start_time=start_time,
         end_time=end_time,
         adapter=adapter,
+        settings=resolved_settings,
     )
     clustering_stats = cluster_articles(db)
     summary_stats = generate_cluster_summaries(db)
@@ -71,4 +76,97 @@ def run_news_ingestion(
         "digest_generated": digest_generated,
         "digest_id": digest_id,
         "surfaced_item_count": surfaced_item_count,
+    }
+
+
+def run_sec_pipeline(
+    db: Session,
+    *,
+    watchlist_id: int | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Run SEC filings ingestion only."""
+
+    resolved_settings = settings or get_settings()
+    end_time = datetime.now(UTC)
+    start_time = end_time - timedelta(hours=resolved_settings.ingestion_lookback_hours)
+    symbols = get_watchlist_symbols(db, watchlist_id=watchlist_id)
+    logger.info("Running SEC ingestion for watchlist_id=%s symbols=%s", watchlist_id, sorted(set(symbols)))
+    return {
+        "watchlist_id": watchlist_id,
+        **ingest_sec_filings(
+            db=db,
+            symbols=symbols,
+            start_time=start_time,
+            end_time=end_time,
+            settings=resolved_settings,
+        ),
+    }
+
+
+def run_full_ingestion(
+    db: Session,
+    *,
+    watchlist_id: int | None = None,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Run news and SEC ingestion together with partial failure handling."""
+
+    resolved_settings = settings or get_settings()
+    end_time = datetime.now(UTC)
+    start_time = end_time - timedelta(hours=resolved_settings.ingestion_lookback_hours)
+    symbols = get_watchlist_symbols(db, watchlist_id=watchlist_id)
+    unique_symbols = sorted(set(symbols))
+    logger.info("Running full ingestion for watchlist_id=%s symbols=%s", watchlist_id, unique_symbols)
+
+    news_error: str | None = None
+    sec_error: str | None = None
+    news_stats = {
+        "provider_used": resolved_settings.news_provider,
+        "fetched_count": 0,
+        "inserted_count": 0,
+        "skipped_duplicates": 0,
+    }
+    filing_stats = {
+        "provider_used": "sec",
+        "mapped_symbol_count": 0,
+        "fetched_count": 0,
+        "inserted_count": 0,
+        "skipped_duplicates": 0,
+    }
+
+    try:
+        news_stats = ingest_news(
+            db=db,
+            symbols=unique_symbols,
+            start_time=start_time,
+            end_time=end_time,
+            settings=resolved_settings,
+        )
+    except Exception as exc:
+        news_error = f"{type(exc).__name__}: {exc}"
+        logger.exception("News ingestion failed during full ingest watchlist_id=%s", watchlist_id)
+
+    try:
+        filing_stats = ingest_sec_filings(
+            db=db,
+            symbols=unique_symbols,
+            start_time=start_time,
+            end_time=end_time,
+            settings=resolved_settings,
+        )
+    except Exception as exc:
+        sec_error = f"{type(exc).__name__}: {exc}"
+        logger.exception("SEC ingestion failed during full ingest watchlist_id=%s", watchlist_id)
+
+    return {
+        "watchlist_id": watchlist_id,
+        "provider_used": news_stats["provider_used"],
+        "news_fetched_count": news_stats["fetched_count"],
+        "news_inserted_count": news_stats["inserted_count"],
+        "filing_fetched_count": filing_stats["fetched_count"],
+        "filing_inserted_count": filing_stats["inserted_count"],
+        "skipped_duplicates": news_stats["skipped_duplicates"] + filing_stats["skipped_duplicates"],
+        "news_error": news_error,
+        "sec_error": sec_error,
     }

@@ -21,6 +21,11 @@ class Settings(BaseModel):
     database_url: str = Field(default="postgresql://postgres:postgres@localhost:5432/after_market_agent")
     debug: bool = Field(default=False)
     default_watchlist_name: str = Field(default="Default Watchlist")
+    news_provider: str = Field(default="mock")
+    news_api_key: str | None = Field(default=None)
+    sec_user_agent: str | None = Field(default=None)
+    sec_api_key: str | None = Field(default=None)
+    ingestion_lookback_hours: int = Field(default=24)
     email_provider: str = Field(default="mock")
     email_api_key: str | None = Field(default=None)
     email_from: str = Field(default="digest@example.com")
@@ -48,6 +53,13 @@ class Settings(BaseModel):
             default_watchlist_name=getenv(
                 "DEFAULT_WATCHLIST_NAME",
                 cls.model_fields["default_watchlist_name"].default,
+            ),
+            news_provider=_get_env_or_default("NEWS_PROVIDER", cls.model_fields["news_provider"].default),
+            news_api_key=getenv("NEWS_API_KEY", cls.model_fields["news_api_key"].default),
+            sec_user_agent=getenv("SEC_USER_AGENT", cls.model_fields["sec_user_agent"].default),
+            sec_api_key=getenv("SEC_API_KEY", cls.model_fields["sec_api_key"].default),
+            ingestion_lookback_hours=int(
+                getenv("INGESTION_LOOKBACK_HOURS", str(cls.model_fields["ingestion_lookback_hours"].default))
             ),
             email_provider=_get_env_or_default("EMAIL_PROVIDER", cls.model_fields["email_provider"].default),
             email_api_key=getenv("EMAIL_API_KEY", cls.model_fields["email_api_key"].default),
@@ -97,8 +109,9 @@ def get_settings() -> Settings:
 
     settings = Settings.from_env()
     logger.info(
-        "Loaded settings environment=%s has_openai_api_key=%s openai_model_summary=%s",
+        "Loaded settings environment=%s news_provider=%s has_openai_api_key=%s openai_model_summary=%s",
         settings.environment,
+        settings.news_provider,
         bool(settings.openai_api_key),
         settings.openai_model_summary,
     )
