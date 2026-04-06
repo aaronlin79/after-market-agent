@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.config import Settings, get_settings
 from backend.app.models import ClusterSummary, SourceItem
 from backend.app.services.openai.openai_client import OpenAIResponsesClient
+from backend.app.services.observability.pipeline_tracker import complete_pipeline_run, fail_pipeline_run, start_pipeline_run
 from backend.app.services.summarization.openai_cluster_summarizer import summarize_cluster_with_openai
 from backend.app.services.summarization.summarization_service import build_baseline_cluster_summary_result
 
@@ -27,6 +28,12 @@ def generate_cluster_summaries(
 
     resolved_settings = settings or get_settings()
     use_openai = bool(resolved_settings.openai_api_key)
+    run = start_pipeline_run(
+        db,
+        run_type="summarization",
+        provider_used=resolved_settings.openai_model_summary if use_openai else "baseline",
+        metrics_json={"has_openai_api_key": use_openai},
+    )
     max_clusters_per_run = max(int(resolved_settings.openai_max_clusters_per_run), 0)
     max_calls_per_run = max(int(resolved_settings.openai_max_calls_per_run), 0)
     cluster_ids = list(
@@ -49,7 +56,7 @@ def generate_cluster_summaries(
 
     if not cluster_ids:
         logger.info("Cluster summarization skipped because no clusters were found.")
-        return {
+        result = {
             "clusters_processed": 0,
             "summaries_generated": 0,
             "skipped_clusters": 0,
@@ -60,6 +67,13 @@ def generate_cluster_summaries(
             "baseline_count": 0,
             "fallback_count": 0,
         }
+        complete_pipeline_run(
+            db,
+            run,
+            metrics_json=result,
+            provider_used="openai" if use_openai else "baseline",
+        )
+        return result
 
     existing_summaries = {
         summary.cluster_id: summary
@@ -214,7 +228,7 @@ def generate_cluster_summaries(
         baseline_count,
         fallback_count,
     )
-    return {
+    result = {
         "clusters_processed": clusters_processed,
         "summaries_generated": summaries_generated,
         "skipped_clusters": skipped_clusters,
@@ -225,6 +239,15 @@ def generate_cluster_summaries(
         "baseline_count": baseline_count,
         "fallback_count": fallback_count,
     }
+    final_status = "partial_success" if fallback_count > 0 or skipped_due_to_limits > 0 else "success"
+    complete_pipeline_run(
+        db,
+        run,
+        status=final_status,
+        metrics_json=result,
+        provider_used=run_summarizer_used,
+    )
+    return result
 
 
 def list_cluster_summaries(db: Session) -> list[dict[str, int | str]]:

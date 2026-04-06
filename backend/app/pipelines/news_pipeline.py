@@ -15,6 +15,7 @@ from backend.app.services.clustering.clustering_service import cluster_articles
 from backend.app.services.digest.digest_service import generate_morning_digest
 from backend.app.services.news.adapters.base import BaseNewsAdapter
 from backend.app.services.news.news_ingestion_service import ingest_news
+from backend.app.services.observability.pipeline_tracker import complete_pipeline_run, fail_pipeline_run, start_pipeline_run
 from backend.app.services.ranking.ranking_service import rank_clusters
 from backend.app.services.sec.sec_ingestion_service import get_watchlist_symbols, ingest_sec_filings
 from backend.app.services.summarization.cluster_summary_service import generate_cluster_summaries
@@ -33,6 +34,12 @@ def run_news_ingestion(
     """Run the news ingestion pipeline for all watchlist symbols."""
 
     resolved_settings = settings or get_settings()
+    run = start_pipeline_run(
+        db,
+        run_type="news_pipeline",
+        trigger_type="manual",
+        provider_used=resolved_settings.news_provider,
+    )
     symbols = list(
         db.execute(select(WatchlistSymbol.symbol).order_by(WatchlistSymbol.symbol.asc())).scalars().all()
     )
@@ -42,41 +49,48 @@ def run_news_ingestion(
     end_time = datetime.now(UTC)
     start_time = end_time - timedelta(hours=resolved_settings.ingestion_lookback_hours)
 
-    ingestion_stats = ingest_news(
-        db=db,
-        symbols=unique_symbols,
-        start_time=start_time,
-        end_time=end_time,
-        adapter=adapter,
-        settings=resolved_settings,
-    )
-    clustering_stats = cluster_articles(db)
-    summary_stats = generate_cluster_summaries(db)
-    ranking_stats = rank_clusters(db)
-    digest_generated = False
-    digest_id: int | None = None
-    surfaced_item_count = 0
+    try:
+        ingestion_stats = ingest_news(
+            db=db,
+            symbols=unique_symbols,
+            start_time=start_time,
+            end_time=end_time,
+            adapter=adapter,
+            settings=resolved_settings,
+        )
+        clustering_stats = cluster_articles(db)
+        summary_stats = generate_cluster_summaries(db)
+        ranking_stats = rank_clusters(db)
+        digest_generated = False
+        digest_id: int | None = None
+        surfaced_item_count = 0
 
-    if generate_digest and digest_watchlist_id is not None:
-        digest_result = generate_morning_digest(db, digest_watchlist_id)
-        digest_generated = True
-        digest_id = digest_result["digest_id"]
-        surfaced_item_count = digest_result["surfaced_item_count"]
+        if generate_digest and digest_watchlist_id is not None:
+            digest_result = generate_morning_digest(db, digest_watchlist_id)
+            digest_generated = True
+            digest_id = digest_result["digest_id"]
+            surfaced_item_count = digest_result["surfaced_item_count"]
 
-    return {
-        **ingestion_stats,
-        "cluster_count": clustering_stats["cluster_count"],
-        "representative_count": clustering_stats["representative_count"],
-        "summaries_generated": summary_stats["summaries_generated"],
-        "clusters_processed": summary_stats["clusters_processed"],
-        "openai_calls_made": summary_stats["openai_calls_made"],
-        "fallback_count": summary_stats["fallback_count"],
-        "skipped_due_to_limits": summary_stats["skipped_due_to_limits"],
-        "ranked_count": ranking_stats["ranked_count"],
-        "digest_generated": digest_generated,
-        "digest_id": digest_id,
-        "surfaced_item_count": surfaced_item_count,
-    }
+        result = {
+            **ingestion_stats,
+            "cluster_count": clustering_stats["cluster_count"],
+            "representative_count": clustering_stats["representative_count"],
+            "summaries_generated": summary_stats["summaries_generated"],
+            "clusters_processed": summary_stats["clusters_processed"],
+            "openai_calls_made": summary_stats["openai_calls_made"],
+            "fallback_count": summary_stats["fallback_count"],
+            "skipped_due_to_limits": summary_stats["skipped_due_to_limits"],
+            "ranked_count": ranking_stats["ranked_count"],
+            "digest_generated": digest_generated,
+            "digest_id": digest_id,
+            "surfaced_item_count": surfaced_item_count,
+        }
+        complete_pipeline_run(db, run, metrics_json=result, provider_used=ingestion_stats["provider_used"])
+        return result
+    except Exception as exc:
+        fail_pipeline_run(db, run, error=exc, provider_used=resolved_settings.news_provider)
+        logger.exception("News pipeline failed for symbols=%s", unique_symbols)
+        raise
 
 
 def run_sec_pipeline(
@@ -88,6 +102,13 @@ def run_sec_pipeline(
     """Run SEC filings ingestion only."""
 
     resolved_settings = settings or get_settings()
+    run = start_pipeline_run(
+        db,
+        run_type="full_ingest",
+        watchlist_id=watchlist_id,
+        trigger_type="manual",
+        provider_used=resolved_settings.news_provider,
+    )
     end_time = datetime.now(UTC)
     start_time = end_time - timedelta(hours=resolved_settings.ingestion_lookback_hours)
     symbols = get_watchlist_symbols(db, watchlist_id=watchlist_id)
@@ -159,7 +180,7 @@ def run_full_ingestion(
         sec_error = f"{type(exc).__name__}: {exc}"
         logger.exception("SEC ingestion failed during full ingest watchlist_id=%s", watchlist_id)
 
-    return {
+    result = {
         "watchlist_id": watchlist_id,
         "provider_used": news_stats["provider_used"],
         "news_fetched_count": news_stats["fetched_count"],
@@ -170,3 +191,6 @@ def run_full_ingestion(
         "news_error": news_error,
         "sec_error": sec_error,
     }
+    final_status = "partial_success" if news_error or sec_error else "success"
+    complete_pipeline_run(db, run, status=final_status, metrics_json=result, provider_used=news_stats["provider_used"])
+    return result

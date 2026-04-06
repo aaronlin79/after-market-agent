@@ -26,6 +26,9 @@ Set `ENABLE_SCHEDULER=true` to enable the daily in-process scheduler.
 Set `OPENAI_API_KEY` to enable OpenAI-backed cluster summaries; otherwise the baseline summarizer is used.
 Set `NEWS_PROVIDER=mock` for local/offline development or `NEWS_PROVIDER=finnhub` with `NEWS_API_KEY` for real company news.
 Set `SEC_USER_AGENT` before using SEC ingestion. `SEC_API_KEY` remains optional.
+Admin inspection endpoints are available under `/admin`, including pipeline runs, source items, clusters, summaries, digests, and local evals.
+Run local evaluations with `POST /admin/evals/run`.
+Evaluation fixtures live under `backend/evals/fixtures/`; see `docs/EVALUATION.md`.
 
 Seed the default watchlist:
 

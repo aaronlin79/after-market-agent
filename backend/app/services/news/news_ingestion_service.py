@@ -15,6 +15,7 @@ from backend.app.models import SourceItem
 from backend.app.services.news.adapters import get_news_adapter
 from backend.app.services.news.adapters.base import BaseNewsAdapter
 from backend.app.services.news.normalizer import normalize_news_item
+from backend.app.services.observability.pipeline_tracker import fail_pipeline_run, start_pipeline_run, complete_pipeline_run
 
 logger = logging.getLogger(__name__)
 
@@ -31,34 +32,56 @@ def ingest_news(
     """Fetch, normalize, deduplicate, and store raw news items."""
 
     resolved_settings = settings or get_settings()
+    run = start_pipeline_run(
+        db,
+        run_type="news_ingestion",
+        trigger_type="manual",
+        provider_used=resolved_settings.news_provider,
+        metrics_json={"symbol_count": len(symbols)},
+    )
     normalized_symbols = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
     if not normalized_symbols:
         logger.info("No symbols provided for news ingestion.")
-        return {
+        stats = {
             "provider_used": resolved_settings.news_provider,
             "fetched_count": 0,
             "inserted_count": 0,
             "skipped_duplicates": 0,
         }
+        complete_pipeline_run(db, run, metrics_json=stats, provider_used=resolved_settings.news_provider)
+        return stats
 
-    adapter_instance = adapter or get_news_adapter(resolved_settings)
-    provider_used = type(adapter_instance).__name__.replace("NewsAdapter", "").replace("Adapter", "").lower() or "news"
-    logger.info("Fetching news for symbols=%s provider=%s", normalized_symbols, provider_used)
-    fetched_items = adapter_instance.fetch_news(normalized_symbols, start_time, end_time)
-    logger.info("Fetched %s raw news items from provider=%s.", len(fetched_items), provider_used)
+    try:
+        adapter_instance = adapter or get_news_adapter(resolved_settings)
+        provider_used = type(adapter_instance).__name__.replace("NewsAdapter", "").replace("Adapter", "").lower() or "news"
+        logger.info("Fetching news for symbols=%s provider=%s", normalized_symbols, provider_used)
+        fetched_items = adapter_instance.fetch_news(normalized_symbols, start_time, end_time)
+        logger.info("Fetched %s raw news items from provider=%s.", len(fetched_items), provider_used)
 
-    normalized_items = [normalize_news_item(raw_item) for raw_item in fetched_items]
-    stats = store_source_items(db, normalized_items, source_type="news")
+        normalized_items = [normalize_news_item(raw_item) for raw_item in fetched_items]
+        stats = store_source_items(db, normalized_items, source_type="news")
 
-    logger.info(
-        "News ingestion complete for symbols=%s provider=%s fetched=%s inserted=%s duplicates=%s",
-        normalized_symbols,
-        provider_used,
-        stats["fetched_count"],
-        stats["inserted_count"],
-        stats["skipped_duplicates"],
-    )
-    return {"provider_used": provider_used, **stats}
+        logger.info(
+            "News ingestion complete for symbols=%s provider=%s fetched=%s inserted=%s duplicates=%s",
+            normalized_symbols,
+            provider_used,
+            stats["fetched_count"],
+            stats["inserted_count"],
+            stats["skipped_duplicates"],
+        )
+        final_stats = {"provider_used": provider_used, **stats}
+        complete_pipeline_run(db, run, metrics_json=final_stats, provider_used=provider_used)
+        return final_stats
+    except Exception as exc:
+        fail_pipeline_run(
+            db,
+            run,
+            error=exc,
+            metrics_json={"symbol_count": len(normalized_symbols)},
+            provider_used=resolved_settings.news_provider,
+        )
+        logger.exception("News ingestion failed for symbols=%s", normalized_symbols)
+        raise
 
 
 def compute_content_hash(title: str, url: str) -> str:

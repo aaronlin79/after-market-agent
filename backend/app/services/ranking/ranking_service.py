@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.models import ClusterSummary, SourceItem, StoryCluster, WatchlistSymbol
+from backend.app.services.observability.pipeline_tracker import complete_pipeline_run, fail_pipeline_run, start_pipeline_run
 from backend.app.services.ranking.event_classifier import classify_event_type
 
 logger = logging.getLogger(__name__)
@@ -35,94 +36,104 @@ EVENT_TYPE_BOOSTS = {
 def rank_clusters(db: Session) -> dict[str, int]:
     """Rank recent story clusters and persist deterministic scores."""
 
+    run = start_pipeline_run(db, run_type="ranking", provider_used="local")
     cutoff = datetime.now(UTC) - timedelta(hours=24)
-    clusters = list(
-        db.execute(
-            select(StoryCluster)
-            .where(StoryCluster.last_seen_at >= cutoff)
-            .order_by(StoryCluster.last_seen_at.desc(), StoryCluster.id.asc())
-        ).scalars()
-    )
-    if not clusters:
-        logger.info("Ranking skipped because no recent clusters were found.")
-        return {"clusters_processed": 0, "ranked_count": 0}
-
-    watchlist_symbols = set(
-        db.execute(select(WatchlistSymbol.symbol)).scalars().all()
-    )
-
-    ranked: list[StoryCluster] = []
-    for cluster in clusters:
-        articles = list(
+    try:
+        clusters = list(
             db.execute(
-                select(SourceItem)
-                .where(SourceItem.cluster_id == cluster.cluster_key)
-                .order_by(SourceItem.published_at.asc(), SourceItem.id.asc())
+                select(StoryCluster)
+                .where(StoryCluster.last_seen_at >= cutoff)
+                .order_by(StoryCluster.last_seen_at.desc(), StoryCluster.id.asc())
             ).scalars()
         )
-        summary = db.execute(
-            select(ClusterSummary).where(ClusterSummary.cluster_id == cluster.cluster_key)
-        ).scalar_one_or_none()
-        if not articles:
-            continue
+        if not clusters:
+            logger.info("Ranking skipped because no recent clusters were found.")
+            stats = {"clusters_processed": 0, "ranked_count": 0}
+            complete_pipeline_run(db, run, metrics_json=stats, provider_used="local")
+            return stats
 
-        cluster_size_score = min(len(articles) / 4, 1.0)
-        relevance_score = _compute_watchlist_relevance(
-            primary_symbol=cluster.primary_symbol,
-            articles=articles,
-            watchlist_symbols=watchlist_symbols,
+        watchlist_symbols = set(
+            db.execute(select(WatchlistSymbol.symbol)).scalars().all()
         )
-        credibility_score = _compute_credibility_score(articles)
-        novelty_score = _compute_novelty_score(cluster.first_seen_at)
-        event_type = classify_event_type(
-            " ".join(
-                value
-                for value in [
-                    cluster.representative_title,
-                    summary.summary_text if summary is not None else "",
-                ]
-                if value
+
+        ranked: list[StoryCluster] = []
+        for cluster in clusters:
+            articles = list(
+                db.execute(
+                    select(SourceItem)
+                    .where(SourceItem.cluster_id == cluster.cluster_key)
+                    .order_by(SourceItem.published_at.asc(), SourceItem.id.asc())
+                ).scalars()
             )
-        ) or "other"
-        event_type_boost = EVENT_TYPE_BOOSTS.get(event_type, EVENT_TYPE_BOOSTS["other"])
+            summary = db.execute(
+                select(ClusterSummary).where(ClusterSummary.cluster_id == cluster.cluster_key)
+            ).scalar_one_or_none()
+            if not articles:
+                continue
 
-        importance_score = round(
-            0.30 * relevance_score
-            + 0.20 * cluster_size_score
-            + 0.20 * credibility_score
-            + 0.20 * novelty_score
-            + 0.10 * event_type_boost,
-            4,
+            cluster_size_score = min(len(articles) / 4, 1.0)
+            relevance_score = _compute_watchlist_relevance(
+                primary_symbol=cluster.primary_symbol,
+                articles=articles,
+                watchlist_symbols=watchlist_symbols,
+            )
+            credibility_score = _compute_credibility_score(articles)
+            novelty_score = _compute_novelty_score(cluster.first_seen_at)
+            event_type = classify_event_type(
+                " ".join(
+                    value
+                    for value in [
+                        cluster.representative_title,
+                        summary.summary_text if summary is not None else "",
+                    ]
+                    if value
+                )
+            ) or "other"
+            event_type_boost = EVENT_TYPE_BOOSTS.get(event_type, EVENT_TYPE_BOOSTS["other"])
+
+            importance_score = round(
+                0.30 * relevance_score
+                + 0.20 * cluster_size_score
+                + 0.20 * credibility_score
+                + 0.20 * novelty_score
+                + 0.10 * event_type_boost,
+                4,
+            )
+
+            cluster.novelty_score = round(novelty_score, 4)
+            cluster.credibility_score = round(credibility_score, 4)
+            cluster.event_type = event_type
+            cluster.importance_score = importance_score
+            cluster.confidence = _assign_confidence(
+                article_count=len(articles),
+                credibility_score=credibility_score,
+                event_type=event_type,
+            )
+            ranked.append(cluster)
+
+        db.commit()
+
+        ranked.sort(key=lambda cluster: cluster.importance_score, reverse=True)
+        average_score = sum(cluster.importance_score for cluster in ranked) / len(ranked) if ranked else 0.0
+        logger.info("Ranked %s clusters with average importance score %.3f", len(ranked), average_score)
+        logger.info(
+            "Top ranked clusters: %s",
+            [
+                {
+                    "cluster_key": cluster.cluster_key,
+                    "importance_score": cluster.importance_score,
+                    "event_type": cluster.event_type,
+                }
+                for cluster in ranked[:5]
+            ],
         )
-
-        cluster.novelty_score = round(novelty_score, 4)
-        cluster.credibility_score = round(credibility_score, 4)
-        cluster.event_type = event_type
-        cluster.importance_score = importance_score
-        cluster.confidence = _assign_confidence(
-            article_count=len(articles),
-            credibility_score=credibility_score,
-            event_type=event_type,
-        )
-        ranked.append(cluster)
-
-    db.commit()
-
-    ranked.sort(key=lambda cluster: cluster.importance_score, reverse=True)
-    average_score = sum(cluster.importance_score for cluster in ranked) / len(ranked) if ranked else 0.0
-    logger.info("Ranked %s clusters with average importance score %.3f", len(ranked), average_score)
-    logger.info(
-        "Top ranked clusters: %s",
-        [
-            {
-                "cluster_key": cluster.cluster_key,
-                "importance_score": cluster.importance_score,
-                "event_type": cluster.event_type,
-            }
-            for cluster in ranked[:5]
-        ],
-    )
-    return {"clusters_processed": len(clusters), "ranked_count": len(ranked)}
+        stats = {"clusters_processed": len(clusters), "ranked_count": len(ranked)}
+        complete_pipeline_run(db, run, metrics_json=stats, provider_used="local")
+        return stats
+    except Exception as exc:
+        fail_pipeline_run(db, run, error=exc, provider_used="local")
+        logger.exception("Ranking failed.")
+        raise
 
 
 def list_ranked_clusters(db: Session) -> list[dict[str, int | float | str | None]]:

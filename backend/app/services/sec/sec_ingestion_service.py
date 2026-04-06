@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.config import Settings, get_settings
 from backend.app.models import SourceItem, WatchlistSymbol
 from backend.app.services.news.news_ingestion_service import compute_content_hash, store_source_items
+from backend.app.services.observability.pipeline_tracker import complete_pipeline_run, fail_pipeline_run, start_pipeline_run
 
 logger = logging.getLogger(__name__)
 
@@ -34,58 +35,82 @@ def ingest_sec_filings(
     """Fetch, normalize, and store recent SEC filings for the given symbols."""
 
     resolved_settings = settings or get_settings()
+    run = start_pipeline_run(
+        db,
+        run_type="sec_ingestion",
+        trigger_type="manual",
+        provider_used="sec",
+        metrics_json={"symbol_count": len(symbols)},
+    )
     if not resolved_settings.sec_user_agent:
-        raise ValueError("SEC_USER_AGENT is required for SEC ingestion.")
+        error = ValueError("SEC_USER_AGENT is required for SEC ingestion.")
+        fail_pipeline_run(db, run, error=error, metrics_json={"symbol_count": len(symbols)}, provider_used="sec")
+        raise error
 
     normalized_symbols = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
     if not normalized_symbols:
         logger.info("No symbols provided for SEC ingestion.")
-        return {
+        stats = {
             "provider_used": "sec",
             "fetched_count": 0,
             "inserted_count": 0,
             "skipped_duplicates": 0,
             "mapped_symbol_count": 0,
         }
+        complete_pipeline_run(db, run, metrics_json=stats, provider_used="sec")
+        return stats
 
-    fetch_json_fn = fetch_json or _fetch_json
-    ticker_mapping = load_company_ticker_mapping(resolved_settings, fetch_json=fetch_json_fn)
-    filings: list[dict[str, Any]] = []
-    mapped_symbols = 0
+    try:
+        fetch_json_fn = fetch_json or _fetch_json
+        ticker_mapping = load_company_ticker_mapping(resolved_settings, fetch_json=fetch_json_fn)
+        filings: list[dict[str, Any]] = []
+        mapped_symbols = 0
 
-    for symbol in normalized_symbols:
-        company_info = ticker_mapping.get(symbol)
-        if company_info is None:
-            logger.warning("No SEC company mapping found for symbol=%s", symbol)
-            continue
+        for symbol in normalized_symbols:
+            company_info = ticker_mapping.get(symbol)
+            if company_info is None:
+                logger.warning("No SEC company mapping found for symbol=%s", symbol)
+                continue
 
-        mapped_symbols += 1
-        submissions_url = SEC_SUBMISSIONS_URL.format(cik=company_info["cik_padded"])
-        submissions = fetch_json_fn(submissions_url, _sec_headers(resolved_settings))
-        filings.extend(
-            _extract_recent_filings(
-                submissions=submissions,
-                symbol=symbol,
-                company_info=company_info,
-                start_time=start_time.astimezone(UTC),
-                end_time=end_time.astimezone(UTC),
+            mapped_symbols += 1
+            submissions_url = SEC_SUBMISSIONS_URL.format(cik=company_info["cik_padded"])
+            submissions = fetch_json_fn(submissions_url, _sec_headers(resolved_settings))
+            filings.extend(
+                _extract_recent_filings(
+                    submissions=submissions,
+                    symbol=symbol,
+                    company_info=company_info,
+                    start_time=start_time.astimezone(UTC),
+                    end_time=end_time.astimezone(UTC),
+                )
             )
-        )
 
-    stats = store_source_items(db, filings, source_type="filing")
-    logger.info(
-        "SEC ingestion complete symbols=%s mapped_symbols=%s fetched=%s inserted=%s duplicates=%s",
-        normalized_symbols,
-        mapped_symbols,
-        stats["fetched_count"],
-        stats["inserted_count"],
-        stats["skipped_duplicates"],
-    )
-    return {
-        "provider_used": "sec",
-        "mapped_symbol_count": mapped_symbols,
-        **stats,
-    }
+        stats = store_source_items(db, filings, source_type="filing")
+        logger.info(
+            "SEC ingestion complete symbols=%s mapped_symbols=%s fetched=%s inserted=%s duplicates=%s",
+            normalized_symbols,
+            mapped_symbols,
+            stats["fetched_count"],
+            stats["inserted_count"],
+            stats["skipped_duplicates"],
+        )
+        final_stats = {
+            "provider_used": "sec",
+            "mapped_symbol_count": mapped_symbols,
+            **stats,
+        }
+        complete_pipeline_run(db, run, metrics_json=final_stats, provider_used="sec")
+        return final_stats
+    except Exception as exc:
+        fail_pipeline_run(
+            db,
+            run,
+            error=exc,
+            metrics_json={"symbol_count": len(normalized_symbols)},
+            provider_used="sec",
+        )
+        logger.exception("SEC ingestion failed for symbols=%s", normalized_symbols)
+        raise
 
 
 def get_watchlist_symbols(db: Session, watchlist_id: int | None = None) -> list[str]:

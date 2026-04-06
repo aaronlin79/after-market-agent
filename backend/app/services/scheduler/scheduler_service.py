@@ -77,6 +77,6 @@ def _run_scheduled_job(watchlist_id: int) -> None:
 
     db = SessionLocal()
     try:
-        run_morning_digest_job(db, watchlist_id=watchlist_id)
+        run_morning_digest_job(db, watchlist_id=watchlist_id, trigger_type="scheduled")
     finally:
         db.close()

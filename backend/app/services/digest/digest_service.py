@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.app.models import ClusterSummary, Digest, DigestEntry, SourceItem, StoryCluster, Watchlist, WatchlistSymbol
+from backend.app.services.observability.pipeline_tracker import complete_pipeline_run, fail_pipeline_run, start_pipeline_run
 
 logger = logging.getLogger(__name__)
 
@@ -25,62 +26,70 @@ SECTION_ORDER = [
 def generate_morning_digest(db: Session, watchlist_id: int) -> dict[str, Any]:
     """Generate or replace the morning digest for a watchlist and run date."""
 
-    watchlist = db.execute(
-        select(Watchlist)
-        .options(selectinload(Watchlist.symbols))
-        .where(Watchlist.id == watchlist_id)
-    ).scalar_one_or_none()
-    if watchlist is None:
-        raise ValueError(f"Watchlist {watchlist_id} was not found.")
+    run = start_pipeline_run(db, run_type="digest_generation", watchlist_id=watchlist_id, provider_used="local")
+    try:
+        watchlist = db.execute(
+            select(Watchlist)
+            .options(selectinload(Watchlist.symbols))
+            .where(Watchlist.id == watchlist_id)
+        ).scalar_one_or_none()
+        if watchlist is None:
+            raise ValueError(f"Watchlist {watchlist_id} was not found.")
 
-    watchlist_symbols = {symbol.symbol for symbol in watchlist.symbols}
-    ranked_clusters = _load_ranked_clusters_for_watchlist(db, watchlist_symbols)
-    digest_items = [_build_digest_item(db, cluster) for cluster in ranked_clusters]
+        watchlist_symbols = {symbol.symbol for symbol in watchlist.symbols}
+        ranked_clusters = _load_ranked_clusters_for_watchlist(db, watchlist_symbols)
+        digest_items = [_build_digest_item(db, cluster) for cluster in ranked_clusters]
 
-    sectioned_items: dict[str, list[dict[str, Any]]] = {section: [] for section in SECTION_ORDER}
-    for item in digest_items:
-        section_name = _determine_section(item)
-        item["section_name"] = section_name
-        sectioned_items[section_name].append(item)
+        sectioned_items: dict[str, list[dict[str, Any]]] = {section: [] for section in SECTION_ORDER}
+        for item in digest_items:
+            section_name = _determine_section(item)
+            item["section_name"] = section_name
+            sectioned_items[section_name].append(item)
 
-    for section_name in SECTION_ORDER:
-        sectioned_items[section_name].sort(
-            key=lambda item: (-item["importance_score"], item["primary_symbol"], item["cluster_key"])
+        for section_name in SECTION_ORDER:
+            sectioned_items[section_name].sort(
+                key=lambda item: (-item["importance_score"], item["primary_symbol"], item["cluster_key"])
+            )
+
+        section_counts = {section: len(items) for section, items in sectioned_items.items() if items}
+        surfaced_item_count = sum(section_counts.values())
+        run_date = datetime.now(UTC).date()
+        subject_line = _build_subject_line(digest_items, run_date)
+        markdown = _render_markdown(run_date, sectioned_items)
+        html = _render_html(run_date, sectioned_items)
+
+        digest = _upsert_digest(
+            db=db,
+            watchlist_id=watchlist_id,
+            run_date=run_date,
+            subject_line=subject_line,
+            markdown=markdown,
+            html=html,
+            sectioned_items=sectioned_items,
         )
 
-    section_counts = {section: len(items) for section, items in sectioned_items.items() if items}
-    surfaced_item_count = sum(section_counts.values())
-    run_date = datetime.now(UTC).date()
-    subject_line = _build_subject_line(digest_items, run_date)
-    markdown = _render_markdown(run_date, sectioned_items)
-    html = _render_html(run_date, sectioned_items)
-
-    digest = _upsert_digest(
-        db=db,
-        watchlist_id=watchlist_id,
-        run_date=run_date,
-        subject_line=subject_line,
-        markdown=markdown,
-        html=html,
-        sectioned_items=sectioned_items,
-    )
-
-    logger.info(
-        "Generated digest watchlist_id=%s considered_clusters=%s surfaced_items=%s sections=%s digest_id=%s",
-        watchlist_id,
-        len(ranked_clusters),
-        surfaced_item_count,
-        section_counts,
-        digest.id,
-    )
-    return {
-        "digest_id": digest.id,
-        "watchlist_id": watchlist_id,
-        "run_date": str(run_date),
-        "section_counts": section_counts,
-        "surfaced_item_count": surfaced_item_count,
-        "subject_line": subject_line,
-    }
+        logger.info(
+            "Generated digest watchlist_id=%s considered_clusters=%s surfaced_items=%s sections=%s digest_id=%s",
+            watchlist_id,
+            len(ranked_clusters),
+            surfaced_item_count,
+            section_counts,
+            digest.id,
+        )
+        result = {
+            "digest_id": digest.id,
+            "watchlist_id": watchlist_id,
+            "run_date": str(run_date),
+            "section_counts": section_counts,
+            "surfaced_item_count": surfaced_item_count,
+            "subject_line": subject_line,
+        }
+        complete_pipeline_run(db, run, metrics_json=result, provider_used="local")
+        return result
+    except Exception as exc:
+        fail_pipeline_run(db, run, error=exc, provider_used="local")
+        logger.exception("Digest generation failed for watchlist_id=%s", watchlist_id)
+        raise
 
 
 def list_digests(db: Session) -> list[dict[str, Any]]:

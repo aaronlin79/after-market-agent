@@ -5,6 +5,7 @@ import logging
 
 from fastapi import FastAPI
 
+from backend.app.api.routes.admin import router as admin_router
 from backend.app.api.routes.clusters import router as clusters_router
 from backend.app.api.routes.digests import router as digests_router
 from backend.app.api.routes.health import router as health_router
@@ -53,6 +54,7 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
+app.include_router(admin_router)
 app.include_router(clusters_router)
 app.include_router(digests_router)
 app.include_router(jobs_router)
