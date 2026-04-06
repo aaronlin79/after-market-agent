@@ -124,7 +124,9 @@ def test_empty_clusters_handled_gracefully(db_session: Session) -> None:
 
     stats = generate_cluster_summaries(db_session)
 
-    assert stats == {"clusters_processed": 0, "summaries_generated": 0, "skipped_clusters": 0}
+    assert stats["clusters_processed"] == 0
+    assert stats["summaries_generated"] == 0
+    assert stats["skipped_clusters"] == 0
 
 
 def test_summarization_is_deterministic(db_session: Session) -> None:

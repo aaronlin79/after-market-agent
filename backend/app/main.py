@@ -1,7 +1,9 @@
 """FastAPI application entrypoint."""
 
-from fastapi import FastAPI
 from contextlib import asynccontextmanager
+import logging
+
+from fastapi import FastAPI
 
 from backend.app.api.routes.clusters import router as clusters_router
 from backend.app.api.routes.digests import router as digests_router
@@ -14,6 +16,22 @@ from backend.app.core.config import get_settings
 from backend.app.services.scheduler.scheduler_service import shutdown_scheduler, start_scheduler_if_enabled
 
 settings = get_settings()
+
+
+def _configure_logging() -> None:
+    """Ensure application logs are visible in local development."""
+
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(
+            level=logging.DEBUG if settings.debug else logging.INFO,
+            format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        )
+    else:
+        root_logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
+
+
+_configure_logging()
 
 
 @asynccontextmanager

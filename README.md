@@ -21,6 +21,7 @@ Digest generation is available at `POST /digests/generate`.
 Digest send uses `POST /digests/{digest_id}/send` and defaults to the mock provider locally.
 The full manual morning run is available at `POST /jobs/morning-run`.
 Set `ENABLE_SCHEDULER=true` to enable the daily in-process scheduler.
+Set `OPENAI_API_KEY` to enable OpenAI-backed cluster summaries; otherwise the baseline summarizer is used.
 
 Seed the default watchlist:
 
