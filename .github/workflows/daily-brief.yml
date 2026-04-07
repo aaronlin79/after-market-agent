@@ -126,7 +126,7 @@ jobs:
         shell: bash
         run: |
           echo "Running migrations against ${DATABASE_URL}"
-          alembic upgrade head
+          alembic -c alembic.ini upgrade head
 
       - name: Execute daily brief
         if: steps.schedule_gate.outputs.should_run == 'true'
