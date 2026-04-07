@@ -14,26 +14,52 @@ const SECTION_ORDER = [
   "Likely Noise",
 ];
 
+const SECTION_COPY = {
+  "Must Know": "Highest-signal developments that deserve attention before the market opens.",
+  "Watch at Open": "Relevant developments to keep on-screen as price discovery starts.",
+  "Undercovered but Important": "Potentially meaningful stories with limited coverage that could still matter.",
+  "SEC Filings Worth Checking": "Filing-driven developments that may require direct source review.",
+  "Likely Noise": "Lower-confidence items that are worth noting but not leading with.",
+};
+
 const elements = {
+  appBanner: document.getElementById("app-banner"),
   navLinks: document.querySelectorAll(".nav-link"),
   views: document.querySelectorAll(".view"),
   runNowButton: document.getElementById("run-now-button"),
+  refreshButton: document.getElementById("refresh-button"),
   runFeedback: document.getElementById("run-feedback"),
   latestRunPill: document.getElementById("latest-run-pill"),
+  heroWatchlistName: document.getElementById("hero-watchlist-name"),
+  heroWatchlistSummary: document.getElementById("hero-watchlist-summary"),
+  heroSymbolCount: document.getElementById("hero-symbol-count"),
+  heroDigestStatus: document.getElementById("hero-digest-status"),
+  heroRunStatus: document.getElementById("hero-run-status"),
   dashboardEmptyState: document.getElementById("dashboard-empty-state"),
   dashboardPanels: document.getElementById("dashboard-panels"),
   digestTitle: document.getElementById("digest-title"),
   digestMeta: document.getElementById("digest-meta"),
   digestSections: document.getElementById("digest-sections"),
+  digestLoading: document.getElementById("digest-loading"),
+  digestError: document.getElementById("digest-error"),
+  clustersLoading: document.getElementById("clusters-loading"),
+  clustersError: document.getElementById("clusters-error"),
   rankedClusters: document.getElementById("ranked-clusters"),
+  watchlistsLoading: document.getElementById("watchlists-loading"),
+  watchlistsError: document.getElementById("watchlists-error"),
   watchlistList: document.getElementById("watchlist-list"),
   watchlistForm: document.getElementById("watchlist-form"),
   watchlistEditForm: document.getElementById("watchlist-edit-form"),
   selectedWatchlistTitle: document.getElementById("selected-watchlist-title"),
   watchlistDetailEmpty: document.getElementById("watchlist-detail-empty"),
   watchlistDetail: document.getElementById("watchlist-detail"),
+  watchlistActionFeedback: document.getElementById("watchlist-action-feedback"),
   symbolForm: document.getElementById("symbol-form"),
   symbolList: document.getElementById("symbol-list"),
+  sampleSymbols: document.getElementById("sample-symbols"),
+  sampleSymbolButtons: document.querySelectorAll(".sample-symbol-button"),
+  runsLoading: document.getElementById("runs-loading"),
+  runsError: document.getElementById("runs-error"),
   runList: document.getElementById("run-list"),
   runSummary: document.getElementById("run-summary"),
   digestEntryTemplate: document.getElementById("digest-entry-template"),
@@ -48,22 +74,41 @@ async function api(path, options = {}) {
     ...options,
   });
 
-  if (!response.ok) {
-    let detail = `Request failed with status ${response.status}`;
-    try {
-      const payload = await response.json();
-      detail = payload.detail || JSON.stringify(payload);
-    } catch (_error) {
-      detail = await response.text();
-    }
-    throw new Error(detail);
-  }
-
   if (response.status === 204) {
     return null;
   }
 
-  return response.json();
+  const rawBody = await response.text();
+  let parsedBody = null;
+  if (rawBody) {
+    try {
+      parsedBody = JSON.parse(rawBody);
+    } catch (_error) {
+      parsedBody = rawBody;
+    }
+  }
+
+  if (!response.ok) {
+    let detail = `Request failed with status ${response.status}`;
+    if (parsedBody && typeof parsedBody === "object" && !Array.isArray(parsedBody)) {
+      const payload = parsedBody;
+      detail = payload.detail || JSON.stringify(payload);
+    } else if (typeof parsedBody === "string" && parsedBody.trim()) {
+      detail = parsedBody;
+    }
+    throw new Error(detail);
+  }
+
+  return parsedBody;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function setActiveView(viewName) {
@@ -73,6 +118,26 @@ function setActiveView(viewName) {
   elements.views.forEach((view) => {
     view.classList.toggle("active", view.id === `${viewName}-view`);
   });
+}
+
+function setBanner(message = "", kind = "success") {
+  if (!message) {
+    elements.appBanner.className = "app-banner hidden";
+    elements.appBanner.textContent = "";
+    return;
+  }
+  elements.appBanner.className = `app-banner ${kind}`;
+  elements.appBanner.textContent = message;
+}
+
+function setBlockState({ loadingEl = null, errorEl = null, loading = false, error = "" }) {
+  if (loadingEl) {
+    loadingEl.classList.toggle("hidden", !loading);
+  }
+  if (errorEl) {
+    errorEl.classList.toggle("hidden", !error);
+    errorEl.textContent = error;
+  }
 }
 
 function formatDateTime(value) {
@@ -86,16 +151,96 @@ function formatScore(value) {
   return typeof value === "number" ? value.toFixed(2) : "0.00";
 }
 
+function isMeaningfulDigest(digest) {
+  return Boolean(digest && Array.isArray(digest.entries) && digest.entries.length > 0);
+}
+
+function inferSectionFromCluster(cluster) {
+  if (cluster.event_type === "sec_filing") {
+    return "SEC Filings Worth Checking";
+  }
+  if (cluster.undercovered_important) {
+    return "Undercovered but Important";
+  }
+  if ((cluster.importance_score || 0) < 0.45 || cluster.confidence === "low") {
+    return "Likely Noise";
+  }
+  if ((cluster.importance_score || 0) >= 0.75 && ["medium", "high"].includes(cluster.confidence)) {
+    return "Must Know";
+  }
+  return "Watch at Open";
+}
+
+function buildFallbackDigestFromRankedClusters() {
+  if (!state.rankedClusters.length) {
+    return null;
+  }
+
+  const entries = state.rankedClusters.slice(0, 8).map((cluster, index) => ({
+    id: `fallback-${cluster.cluster_id || index}`,
+    section_name: inferSectionFromCluster(cluster),
+    rank: index + 1,
+    cluster_id: cluster.cluster_id || null,
+    cluster_key: cluster.cluster_id || null,
+    representative_title: cluster.representative_title || "Untitled cluster",
+    primary_symbol: cluster.primary_symbol || "UNKNOWN",
+    event_type: cluster.event_type || "other",
+    confidence: cluster.confidence || "unknown",
+    importance_score: cluster.importance_score || 0,
+    article_count: cluster.article_count || 0,
+    summary_text: cluster.summary_text || "No summary available.",
+    why_it_matters: cluster.why_it_matters || "Why it matters is not available.",
+    unknowns: Array.isArray(cluster.unknowns) ? cluster.unknowns : [],
+    undercovered_important: Boolean(cluster.undercovered_important),
+  }));
+
+  const symbols = [];
+  entries.forEach((entry) => {
+    if (entry.primary_symbol !== "UNKNOWN" && !symbols.includes(entry.primary_symbol)) {
+      symbols.push(entry.primary_symbol);
+    }
+  });
+
+  return {
+    subject_line: `Morning Brief — ${entries.length} items | ${symbols.slice(0, 3).join(", ") || "Top Signals"}`,
+    generated_at: null,
+    delivery_status: "live",
+    entries,
+    is_fallback: true,
+  };
+}
+
 function selectedWatchlist() {
   return state.watchlists.find((item) => item.id === state.selectedWatchlistId) || null;
+}
+
+function renderHero() {
+  const watchlist = selectedWatchlist() || state.watchlists[0] || null;
+  const latestRun = state.pipelineRuns[0] || null;
+
+  if (!watchlist) {
+    elements.heroWatchlistName.textContent = "Create your first watchlist";
+    elements.heroWatchlistSummary.textContent = "Add the names you want monitored before tomorrow’s open, then run the pipeline.";
+    elements.heroSymbolCount.textContent = "0";
+  } else {
+    elements.heroWatchlistName.textContent = watchlist.name;
+    elements.heroWatchlistSummary.textContent = watchlist.symbol_count
+      ? `${watchlist.symbol_count} tracked symbols ready for the next digest.`
+      : "This watchlist is empty. Add symbols before running the pipeline.";
+    elements.heroSymbolCount.textContent = String(watchlist.symbol_count || 0);
+  }
+
+  elements.heroDigestStatus.textContent = state.latestDigest ? "Ready" : "Not generated";
+  elements.heroRunStatus.textContent = latestRun ? latestRun.status : "No runs yet";
 }
 
 function renderWatchlists() {
   elements.watchlistList.innerHTML = "";
 
   if (!state.watchlists.length) {
-    elements.watchlistList.innerHTML = '<div class="muted">No watchlists yet. Create one to get started.</div>';
+    elements.watchlistList.innerHTML = '<div class="empty-state"><h3>No watchlists yet</h3><p>Create one to start building tomorrow morning’s brief.</p></div>';
     renderWatchlistDetail(null);
+    renderHero();
     return;
   }
 
@@ -122,14 +267,18 @@ function renderWatchlists() {
   });
 
   renderWatchlistDetail(selectedWatchlist());
+  renderHero();
 }
 
 function renderWatchlistDetail(watchlist) {
   if (!watchlist) {
     elements.selectedWatchlistTitle.textContent = "Select a watchlist";
+    elements.watchlistDetailEmpty.innerHTML = "Choose a watchlist to edit symbols.";
     elements.watchlistDetailEmpty.classList.remove("hidden");
     elements.watchlistDetail.classList.add("hidden");
     elements.symbolList.innerHTML = "";
+    elements.watchlistActionFeedback.textContent = "";
+    elements.sampleSymbols.classList.add("hidden");
     elements.watchlistEditForm.reset();
     return;
   }
@@ -142,10 +291,12 @@ function renderWatchlistDetail(watchlist) {
 
   elements.symbolList.innerHTML = "";
   if (!watchlist.symbols?.length) {
-    elements.symbolList.innerHTML = '<div class="muted">No symbols yet. Add one below.</div>';
+    elements.sampleSymbols.classList.remove("hidden");
+    elements.symbolList.innerHTML = '<div class="empty-state"><h3>No symbols yet</h3><p>Add symbols below so the pipeline has something to monitor before the next run.</p></div>';
     return;
   }
 
+  elements.sampleSymbols.classList.add("hidden");
   const sortedSymbols = [...watchlist.symbols].sort((left, right) => left.symbol.localeCompare(right.symbol));
   sortedSymbols.forEach((symbol) => {
     const item = document.createElement("div");
@@ -162,10 +313,13 @@ function renderWatchlistDetail(watchlist) {
     `;
     item.querySelector("button").addEventListener("click", async () => {
       try {
+        elements.watchlistActionFeedback.textContent = `Removing ${symbol.symbol}...`;
         await api(`/watchlists/${watchlist.id}/symbols/${symbol.id}`, { method: "DELETE" });
+        elements.watchlistActionFeedback.textContent = `${symbol.symbol} removed from ${watchlist.name}.`;
         await loadWatchlists(watchlist.id);
       } catch (error) {
-        window.alert(error.message);
+        elements.watchlistActionFeedback.textContent = `Could not remove ${symbol.symbol}: ${error.message}`;
+        setBanner(`Could not remove ${symbol.symbol}. ${error.message}`, "error");
       }
     });
     elements.symbolList.appendChild(item);
@@ -173,21 +327,23 @@ function renderWatchlistDetail(watchlist) {
 }
 
 function renderDigest() {
-  const digest = state.latestDigest;
+  const digest = isMeaningfulDigest(state.latestDigest) ? state.latestDigest : buildFallbackDigestFromRankedClusters();
   elements.digestSections.innerHTML = "";
 
   if (!digest) {
     elements.dashboardEmptyState.classList.remove("hidden");
     elements.dashboardPanels.classList.add("hidden");
-    elements.digestTitle.textContent = "No digest available";
-    elements.digestMeta.textContent = "";
+    elements.digestTitle.textContent = "No digest available yet";
+    elements.digestMeta.textContent = "Run the morning pipeline once your watchlist is ready.";
     return;
   }
 
   elements.dashboardEmptyState.classList.add("hidden");
   elements.dashboardPanels.classList.remove("hidden");
   elements.digestTitle.textContent = digest.subject_line;
-  elements.digestMeta.textContent = `Generated ${formatDateTime(digest.generated_at)} • ${digest.delivery_status}`;
+  elements.digestMeta.textContent = digest.is_fallback
+    ? "Showing live ranked clusters because the latest stored digest has no surfaced entries yet."
+    : `Generated ${formatDateTime(digest.generated_at)} • delivery ${digest.delivery_status}`;
 
   const grouped = new Map();
   digest.entries.forEach((entry) => {
@@ -198,15 +354,25 @@ function renderDigest() {
     grouped.get(section).push(entry);
   });
 
-  SECTION_ORDER.forEach((sectionName) => {
-    const entries = grouped.get(sectionName) || [];
-    if (!entries.length) {
-      return;
-    }
+  const populatedSections = SECTION_ORDER.filter((sectionName) => (grouped.get(sectionName) || []).length > 0);
+  if (!populatedSections.length) {
+    elements.digestSections.innerHTML = '<div class="empty-state"><h3>No surfaced stories</h3><p>The digest exists but does not yet contain ranked items for this watchlist.</p></div>';
+    return;
+  }
 
+  populatedSections.forEach((sectionName) => {
+    const entries = grouped.get(sectionName) || [];
     const section = document.createElement("section");
     section.className = "section-block";
-    section.innerHTML = `<h3>${escapeHtml(sectionName)}</h3>`;
+    section.innerHTML = `
+      <div class="panel-header">
+        <div>
+          <h3>${escapeHtml(sectionName)}</h3>
+          <p class="section-copy">${escapeHtml(SECTION_COPY[sectionName] || "")}</p>
+        </div>
+        <span class="badge subtle">${entries.length} item${entries.length === 1 ? "" : "s"}</span>
+      </div>
+    `;
 
     entries.forEach((entry) => {
       const node = elements.digestEntryTemplate.content.firstElementChild.cloneNode(true);
@@ -222,6 +388,17 @@ function renderDigest() {
       if (entry.undercovered_important) {
         undercovered.classList.remove("hidden");
       }
+
+      if (Array.isArray(entry.unknowns) && entry.unknowns.length) {
+        const unknowns = document.createElement("div");
+        unknowns.className = "unknowns-box";
+        unknowns.innerHTML = `
+          <div class="card-label">Still unclear</div>
+          <ul class="unknowns-list">${entry.unknowns.map((value) => `<li>${escapeHtml(value)}</li>`).join("")}</ul>
+        `;
+        node.appendChild(unknowns);
+      }
+
       section.appendChild(node);
     });
 
@@ -233,7 +410,7 @@ function renderRankedClusters() {
   elements.rankedClusters.innerHTML = "";
 
   if (!state.rankedClusters.length) {
-    elements.rankedClusters.innerHTML = '<div class="muted">No ranked clusters yet.</div>';
+    elements.rankedClusters.innerHTML = '<div class="empty-state"><h3>No ranked clusters yet</h3><p>Run the pipeline to populate the top signals list.</p></div>';
     return;
   }
 
@@ -261,6 +438,7 @@ function renderRankedClusters() {
         <div class="card-label">Why it matters</div>
         <p>${escapeHtml(cluster.why_it_matters || "Why it matters is not available.")}</p>
       </div>
+      ${Array.isArray(cluster.unknowns) && cluster.unknowns.length ? `<div class="cluster-meta small">Still unclear: ${escapeHtml(cluster.unknowns.join(" • "))}</div>` : ""}
       <div class="cluster-meta small">Article count: ${cluster.article_count || 0}</div>
     `;
     elements.rankedClusters.appendChild(card);
@@ -272,9 +450,10 @@ function renderRuns() {
   elements.runSummary.innerHTML = "";
 
   if (!state.pipelineRuns.length) {
-    elements.runList.innerHTML = '<div class="muted">No pipeline runs yet.</div>';
-    elements.runSummary.innerHTML = '<div class="muted">Run the pipeline to see operational status.</div>';
+    elements.runList.innerHTML = '<div class="empty-state"><h3>No recent runs</h3><p>Pipeline history will appear here after the first run.</p></div>';
+    elements.runSummary.innerHTML = '<div class="empty-state"><h3>Status summary</h3><p>The latest successful and failed runs will appear here once the pipeline has executed.</p></div>';
     elements.latestRunPill.textContent = "No runs yet";
+    renderHero();
     return;
   }
 
@@ -284,7 +463,7 @@ function renderRuns() {
   state.pipelineRuns.slice(0, 8).forEach((run) => {
     const card = document.createElement("article");
     card.className = "run-card";
-    const metrics = run.metrics_json ? `<div class="run-metrics small">${escapeHtml(JSON.stringify(run.metrics_json))}</div>` : "";
+    const metrics = formatRunMetrics(run.metrics_json);
     card.innerHTML = `
       <div class="topbar">
         <div>
@@ -293,7 +472,7 @@ function renderRuns() {
         </div>
         <span class="badge subtle">${run.duration_ms ?? "?"} ms</span>
       </div>
-      ${metrics}
+      ${metrics ? `<div class="run-metrics small">${escapeHtml(metrics)}</div>` : ""}
     `;
     elements.runList.appendChild(card);
   });
@@ -321,44 +500,126 @@ function renderRuns() {
     card.innerHTML = `<h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.value)}</p>`;
     elements.runSummary.appendChild(card);
   });
+
+  renderHero();
+}
+
+function formatRunMetrics(metrics) {
+  if (!metrics || typeof metrics !== "object") {
+    return "";
+  }
+  const orderedKeys = [
+    "fetched_count",
+    "inserted_count",
+    "cluster_count",
+    "summaries_generated",
+    "ranked_count",
+    "digest_id",
+    "emailed",
+  ];
+  const formatted = orderedKeys
+    .filter((key) => key in metrics)
+    .map((key) => `${key.replaceAll("_", " ")}: ${metrics[key]}`);
+  return formatted.join(" • ");
 }
 
 async function loadLatestDigest() {
-  const digests = await api("/digests");
-  if (!digests.length) {
+  setBlockState({ loadingEl: elements.digestLoading, errorEl: elements.digestError, loading: true, error: "" });
+  try {
+    const digests = await api("/digests");
+    if (!digests.length) {
+      state.latestDigest = null;
+      renderDigest();
+      return;
+    }
+    state.latestDigest = await api(`/digests/${digests[0].id}`);
+    renderDigest();
+  } catch (error) {
     state.latestDigest = null;
     renderDigest();
+    setBlockState({
+      loadingEl: elements.digestLoading,
+      errorEl: elements.digestError,
+      loading: false,
+      error: `Could not load the latest digest. ${error.message}`,
+    });
     return;
   }
-  state.latestDigest = await api(`/digests/${digests[0].id}`);
-  renderDigest();
+  setBlockState({ loadingEl: elements.digestLoading, errorEl: elements.digestError, loading: false, error: "" });
 }
 
 async function loadRankedClusters() {
-  state.rankedClusters = await api("/clusters/ranked");
-  renderRankedClusters();
+  setBlockState({ loadingEl: elements.clustersLoading, errorEl: elements.clustersError, loading: true, error: "" });
+  try {
+    state.rankedClusters = await api("/clusters/ranked");
+    renderRankedClusters();
+    if (!isMeaningfulDigest(state.latestDigest)) {
+      renderDigest();
+    }
+    setBlockState({ loadingEl: elements.clustersLoading, errorEl: elements.clustersError, loading: false, error: "" });
+  } catch (error) {
+    state.rankedClusters = [];
+    renderRankedClusters();
+    if (!isMeaningfulDigest(state.latestDigest)) {
+      renderDigest();
+    }
+    setBlockState({
+      loadingEl: elements.clustersLoading,
+      errorEl: elements.clustersError,
+      loading: false,
+      error: `Could not load ranked clusters. ${error.message}`,
+    });
+  }
 }
 
 async function loadPipelineRuns() {
-  state.pipelineRuns = await api("/admin/pipeline-runs");
-  renderRuns();
+  setBlockState({ loadingEl: elements.runsLoading, errorEl: elements.runsError, loading: true, error: "" });
+  try {
+    state.pipelineRuns = await api("/admin/pipeline-runs");
+    renderRuns();
+    setBlockState({ loadingEl: elements.runsLoading, errorEl: elements.runsError, loading: false, error: "" });
+  } catch (error) {
+    state.pipelineRuns = [];
+    renderRuns();
+    setBlockState({
+      loadingEl: elements.runsLoading,
+      errorEl: elements.runsError,
+      loading: false,
+      error: `Could not load pipeline history. ${error.message}`,
+    });
+  }
 }
 
 async function loadWatchlists(preferredWatchlistId = null) {
-  const watchlists = await api("/watchlists");
-  state.watchlists = watchlists;
+  setBlockState({ loadingEl: elements.watchlistsLoading, errorEl: elements.watchlistsError, loading: true, error: "" });
+  try {
+    const watchlists = await api("/watchlists");
+    state.watchlists = watchlists;
 
-  const nextSelectedId = preferredWatchlistId
-    || state.selectedWatchlistId
-    || (watchlists[0] ? watchlists[0].id : null);
+    const nextSelectedId = preferredWatchlistId
+      || state.selectedWatchlistId
+      || (watchlists[0] ? watchlists[0].id : null);
 
-  if (!nextSelectedId) {
+    if (!nextSelectedId) {
+      state.selectedWatchlistId = null;
+      renderWatchlists();
+      setBlockState({ loadingEl: elements.watchlistsLoading, errorEl: elements.watchlistsError, loading: false, error: "" });
+      return;
+    }
+
+    await loadWatchlistDetail(nextSelectedId, watchlists);
+    setBlockState({ loadingEl: elements.watchlistsLoading, errorEl: elements.watchlistsError, loading: false, error: "" });
+  } catch (error) {
+    state.watchlists = [];
     state.selectedWatchlistId = null;
     renderWatchlists();
-    return;
+    setBlockState({
+      loadingEl: elements.watchlistsLoading,
+      errorEl: elements.watchlistsError,
+      loading: false,
+      error: `Could not load watchlists. ${error.message}`,
+    });
   }
-
-  await loadWatchlistDetail(nextSelectedId, watchlists);
 }
 
 async function loadWatchlistDetail(watchlistId, listResponse = null) {
@@ -387,25 +648,41 @@ async function loadWatchlistDetail(watchlistId, listResponse = null) {
 async function handleRunNow() {
   const targetWatchlist = selectedWatchlist() || state.watchlists[0] || null;
   if (!targetWatchlist) {
-    window.alert("Create a watchlist before running the pipeline.");
+    setBanner("Create a watchlist and add symbols before running the pipeline.", "error");
+    setActiveView("watchlists");
+    return;
+  }
+
+  if (!(targetWatchlist.symbols?.length || targetWatchlist.symbol_count > 0)) {
+    setBanner("Add at least one symbol before running the pipeline.", "error");
     setActiveView("watchlists");
     return;
   }
 
   elements.runNowButton.disabled = true;
-  elements.runFeedback.textContent = "Running the full morning pipeline...";
+  elements.refreshButton.disabled = true;
+  elements.runNowButton.textContent = "Running...";
+  elements.runFeedback.textContent = `Running the morning pipeline for ${targetWatchlist.name}...`;
+  setBanner("", "success");
 
   try {
     const result = await api("/jobs/morning-run", {
       method: "POST",
       body: JSON.stringify({ watchlist_id: targetWatchlist.id }),
     });
-    elements.runFeedback.textContent = `Run complete. ${result.fetched_count} fetched, ${result.cluster_count} clusters, digest ${result.digest_id ?? "not generated"}.`;
+    elements.runFeedback.textContent =
+      `Complete: ${result.fetched_count} fetched, ${result.inserted_count} inserted, ${result.cluster_count} clusters, ${result.summaries_generated} summaries, ${result.ranked_count} ranked, digest ${result.digest_id ?? "not generated"}, emailed ${result.emailed}.`;
+    setBanner("Morning run finished successfully. The dashboard has been refreshed.", "success");
     await refreshDashboard();
   } catch (error) {
-    elements.runFeedback.textContent = `Run failed: ${error.message}`;
+    elements.runFeedback.textContent = `Run failed. ${error.message}`;
+    setBanner(`Morning run failed. ${error.message} Check Runs & Status for details.`, "error");
+    setActiveView("runs");
+    await loadPipelineRuns();
   } finally {
     elements.runNowButton.disabled = false;
+    elements.refreshButton.disabled = false;
+    elements.runNowButton.textContent = "Run now";
   }
 }
 
@@ -414,8 +691,89 @@ async function refreshDashboard() {
     loadLatestDigest(),
     loadRankedClusters(),
     loadPipelineRuns(),
-    loadWatchlists(),
+    loadWatchlists(state.selectedWatchlistId),
   ]);
+}
+
+async function handleWatchlistCreate(event) {
+  event.preventDefault();
+  const form = new FormData(elements.watchlistForm);
+  try {
+    const created = await api("/watchlists", {
+      method: "POST",
+      body: JSON.stringify({
+        name: form.get("name"),
+        description: form.get("description") || null,
+      }),
+    });
+    elements.watchlistForm.reset();
+    elements.watchlistActionFeedback.textContent = `Created ${created.name}.`;
+    setBanner(`Created watchlist ${created.name}.`, "success");
+    await loadWatchlists(created.id);
+  } catch (error) {
+    setBanner(`Could not create watchlist. ${error.message}`, "error");
+  }
+}
+
+async function handleWatchlistUpdate(event) {
+  event.preventDefault();
+  const watchlist = selectedWatchlist();
+  if (!watchlist) {
+    return;
+  }
+  const form = new FormData(elements.watchlistEditForm);
+  try {
+    await api(`/watchlists/${watchlist.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        name: form.get("name"),
+        description: form.get("description") || null,
+      }),
+    });
+    elements.watchlistActionFeedback.textContent = `Saved changes to ${form.get("name")}.`;
+    setBanner("Watchlist updated.", "success");
+    await loadWatchlists(watchlist.id);
+  } catch (error) {
+    elements.watchlistActionFeedback.textContent = `Could not update watchlist. ${error.message}`;
+    setBanner(`Could not update watchlist. ${error.message}`, "error");
+  }
+}
+
+async function addSymbol(payload) {
+  const watchlist = selectedWatchlist();
+  if (!watchlist) {
+    setBanner("Select a watchlist before adding symbols.", "error");
+    return;
+  }
+  try {
+    await api(`/watchlists/${watchlist.id}/symbols`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    elements.watchlistActionFeedback.textContent = `${payload.symbol} added to ${watchlist.name}.`;
+    setBanner(`Added ${payload.symbol} to ${watchlist.name}.`, "success");
+    await loadWatchlists(watchlist.id);
+  } catch (error) {
+    const duplicate = error.message.toLowerCase().includes("already") || error.message.includes("409");
+    const message = duplicate
+      ? `${payload.symbol} is already on this watchlist.`
+      : `Could not add ${payload.symbol}. ${error.message}`;
+    elements.watchlistActionFeedback.textContent = message;
+    setBanner(message, "error");
+  }
+}
+
+async function handleSymbolSubmit(event) {
+  event.preventDefault();
+  const form = new FormData(elements.symbolForm);
+  await addSymbol({
+    symbol: form.get("symbol"),
+    company_name: form.get("company_name"),
+    sector: form.get("sector") || null,
+    priority_weight: Number(form.get("priority_weight") || "1"),
+  });
+  elements.symbolForm.reset();
+  elements.symbolForm.elements.priority_weight.value = "1.0";
 }
 
 function attachEventListeners() {
@@ -428,87 +786,36 @@ function attachEventListeners() {
   });
 
   elements.runNowButton.addEventListener("click", handleRunNow);
-
-  elements.watchlistForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = new FormData(elements.watchlistForm);
-    try {
-      const created = await api("/watchlists", {
-        method: "POST",
-        body: JSON.stringify({
-          name: form.get("name"),
-          description: form.get("description") || null,
-        }),
-      });
-      elements.watchlistForm.reset();
-      await loadWatchlists(created.id);
-    } catch (error) {
-      window.alert(error.message);
-    }
+  elements.refreshButton.addEventListener("click", async () => {
+    elements.runFeedback.textContent = "Refreshing dashboard data...";
+    await refreshDashboard();
+    elements.runFeedback.textContent = "Dashboard refreshed.";
   });
+  elements.watchlistForm.addEventListener("submit", handleWatchlistCreate);
+  elements.watchlistEditForm.addEventListener("submit", handleWatchlistUpdate);
+  elements.symbolForm.addEventListener("submit", handleSymbolSubmit);
 
-  elements.watchlistEditForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const watchlist = selectedWatchlist();
-    if (!watchlist) {
-      return;
-    }
-    const form = new FormData(elements.watchlistEditForm);
-    try {
-      await api(`/watchlists/${watchlist.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          name: form.get("name"),
-          description: form.get("description") || null,
-        }),
+  elements.sampleSymbolButtons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      await addSymbol({
+        symbol: button.dataset.symbol,
+        company_name: button.dataset.companyName,
+        sector: null,
+        priority_weight: 1.0,
       });
-      await loadWatchlists(watchlist.id);
-    } catch (error) {
-      window.alert(error.message);
-    }
+    });
   });
-
-  elements.symbolForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const watchlist = selectedWatchlist();
-    if (!watchlist) {
-      return;
-    }
-    const form = new FormData(elements.symbolForm);
-    try {
-      await api(`/watchlists/${watchlist.id}/symbols`, {
-        method: "POST",
-        body: JSON.stringify({
-          symbol: form.get("symbol"),
-          company_name: form.get("company_name"),
-          sector: form.get("sector") || null,
-          priority_weight: Number(form.get("priority_weight") || "1"),
-        }),
-      });
-      elements.symbolForm.reset();
-      elements.symbolForm.elements.priority_weight.value = "1.0";
-      await loadWatchlists(watchlist.id);
-    } catch (error) {
-      window.alert(error.message);
-    }
-  });
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 async function init() {
   attachEventListeners();
+  setBanner("", "success");
   try {
     await refreshDashboard();
+    elements.runFeedback.textContent = "Ready. Configure the watchlist or run the pipeline.";
   } catch (error) {
-    elements.runFeedback.textContent = `Initial load failed: ${error.message}`;
+    elements.runFeedback.textContent = `Initial load failed. ${error.message}`;
+    setBanner(`Could not connect cleanly to the backend. ${error.message}`, "error");
   }
 }
 

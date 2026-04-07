@@ -192,6 +192,13 @@ def get_digest(db: Session, digest_id: int) -> dict[str, Any] | None:
                     if entry.cluster_id in cluster_lookup
                     else None
                 ),
+                "unknowns": (
+                    _extract_unknowns(
+                        summary_lookup.get(cluster_lookup[entry.cluster_id].cluster_key)
+                    )
+                    if entry.cluster_id in cluster_lookup
+                    else []
+                ),
                 "undercovered_important": entry.section_name == "Undercovered but Important",
                 "rationale_json": entry.rationale_json,
             }
@@ -412,6 +419,15 @@ def _extract_why_it_matters(summary: ClusterSummary | None) -> str:
         return "Why it matters is not available."
     value = summary.structured_payload_json.get("why_it_matters")
     return str(value).strip() if value is not None and str(value).strip() else "Why it matters is not available."
+
+
+def _extract_unknowns(summary: ClusterSummary | None) -> list[str]:
+    if summary is None or not summary.structured_payload_json:
+        return []
+    value = summary.structured_payload_json.get("unknowns")
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _is_undercovered_important(cluster: StoryCluster, article_count: int) -> bool:

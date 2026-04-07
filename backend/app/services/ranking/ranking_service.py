@@ -167,6 +167,7 @@ def list_ranked_clusters(db: Session) -> list[dict[str, int | float | str | None
             "confidence": cluster.confidence,
             "summary_text": summaries[cluster.cluster_key].summary_text if cluster.cluster_key in summaries else None,
             "why_it_matters": _extract_why_it_matters(summaries.get(cluster.cluster_key)),
+            "unknowns": _extract_unknowns(summaries.get(cluster.cluster_key)),
             "article_count": article_counts.get(cluster.cluster_key, 0),
             "undercovered_important": _is_undercovered_important(
                 cluster.importance_score,
@@ -241,6 +242,15 @@ def _extract_why_it_matters(summary: ClusterSummary | None) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _extract_unknowns(summary: ClusterSummary | None) -> list[str]:
+    if summary is None or not summary.structured_payload_json:
+        return []
+    value = summary.structured_payload_json.get("unknowns")
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _is_undercovered_important(importance_score: float, article_count: int) -> bool:

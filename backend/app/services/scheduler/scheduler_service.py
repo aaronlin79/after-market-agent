@@ -24,6 +24,8 @@ def start_scheduler_if_enabled(settings: Settings | None = None) -> bool:
     if not resolved_settings.enable_scheduler:
         logger.info("Scheduler startup skipped because ENABLE_SCHEDULER is false.")
         return False
+    if not resolved_settings.secured_scheduled_watchlist():
+        raise RuntimeError("SCHEDULED_WATCHLIST_ID must be greater than zero when ENABLE_SCHEDULER is true.")
     if _scheduler is not None and _scheduler.running:
         logger.info("Scheduler startup skipped because it is already running.")
         return False
@@ -36,7 +38,10 @@ def start_scheduler_if_enabled(settings: Settings | None = None) -> bool:
             "APScheduler is required when ENABLE_SCHEDULER is true. Install project dependencies first."
         ) from exc
 
-    timezone = ZoneInfo(resolved_settings.digest_timezone)
+    try:
+        timezone = ZoneInfo(resolved_settings.digest_timezone)
+    except Exception as exc:
+        raise RuntimeError(f"Invalid DIGEST_TIMEZONE: {resolved_settings.digest_timezone}") from exc
     scheduler = BackgroundScheduler(timezone=timezone)
     scheduler.add_job(
         _run_scheduled_job,
@@ -78,5 +83,8 @@ def _run_scheduled_job(watchlist_id: int) -> None:
     db = SessionLocal()
     try:
         run_morning_digest_job(db, watchlist_id=watchlist_id, trigger_type="scheduled")
+        logger.info("Scheduled morning job finished watchlist_id=%s", watchlist_id)
+    except Exception:
+        logger.exception("Scheduled morning job failed watchlist_id=%s", watchlist_id)
     finally:
         db.close()

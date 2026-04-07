@@ -23,6 +23,8 @@ def send_digest_email(
     db: Session,
     digest_id: int,
     settings: Settings | None = None,
+    *,
+    trigger_type: str = "manual",
 ) -> dict[str, Any]:
     """Send a digest using the configured email provider."""
 
@@ -30,7 +32,7 @@ def send_digest_email(
     run = start_pipeline_run(
         db,
         run_type="email_send",
-        trigger_type="manual",
+        trigger_type=trigger_type,
         provider_used=resolved_settings.email_provider,
         metrics_json={"digest_id": digest_id},
     )

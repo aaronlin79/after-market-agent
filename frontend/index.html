@@ -27,14 +27,41 @@
       </aside>
 
       <main class="content">
+        <div id="app-banner" class="app-banner hidden"></div>
+
         <section id="dashboard-view" class="view active">
           <div class="topbar">
             <div>
               <div class="eyebrow">Morning Brief</div>
               <h2>Dashboard</h2>
             </div>
-            <div id="latest-run-pill" class="status-pill">Loading latest run...</div>
+            <div class="topbar-actions">
+              <div id="latest-run-pill" class="status-pill">Loading latest run...</div>
+              <button id="refresh-button" class="secondary-button" type="button">Refresh</button>
+            </div>
           </div>
+
+          <section class="hero-panel">
+            <div>
+              <div class="eyebrow">Ready For Tomorrow Morning</div>
+              <h3 id="hero-watchlist-name">Loading watchlist...</h3>
+              <p id="hero-watchlist-summary" class="muted">Checking watchlist coverage and latest run state.</p>
+            </div>
+            <div class="hero-stats">
+              <div class="hero-stat">
+                <span class="card-label">Symbols</span>
+                <strong id="hero-symbol-count">0</strong>
+              </div>
+              <div class="hero-stat">
+                <span class="card-label">Latest digest</span>
+                <strong id="hero-digest-status">Waiting</strong>
+              </div>
+              <div class="hero-stat">
+                <span class="card-label">Last run</span>
+                <strong id="hero-run-status">Unknown</strong>
+              </div>
+            </div>
+          </section>
 
           <div id="dashboard-empty-state" class="empty-state hidden">
             <h3>No digest yet</h3>
@@ -51,6 +78,8 @@
                 </div>
                 <div id="digest-meta" class="muted"></div>
               </div>
+              <div id="digest-loading" class="loading-block">Loading the latest digest...</div>
+              <div id="digest-error" class="error-block hidden"></div>
               <div id="digest-sections" class="digest-sections"></div>
             </section>
 
@@ -61,6 +90,8 @@
                   <h3>Ranked clusters</h3>
                 </div>
               </div>
+              <div id="clusters-loading" class="loading-block">Loading ranked clusters...</div>
+              <div id="clusters-error" class="error-block hidden"></div>
               <div id="ranked-clusters" class="stack"></div>
             </section>
           </div>
@@ -82,6 +113,8 @@
                   <h3>Watchlists</h3>
                 </div>
               </div>
+              <div id="watchlists-loading" class="loading-block">Loading watchlists...</div>
+              <div id="watchlists-error" class="error-block hidden"></div>
               <div id="watchlist-list" class="stack"></div>
             </section>
 
@@ -113,19 +146,21 @@
                 <h3 id="selected-watchlist-title">Select a watchlist</h3>
               </div>
             </div>
-            <div id="watchlist-detail-empty" class="muted">Choose a watchlist to edit symbols.</div>
-            <div id="watchlist-detail" class="hidden">
-              <form id="watchlist-edit-form" class="form two-column">
-                <label>
-                  <span>Watchlist name</span>
-                  <input name="name" required />
-                </label>
+              <div id="watchlist-detail-empty" class="muted">Choose a watchlist to edit symbols.</div>
+              <div id="watchlist-detail" class="hidden">
+                <p class="muted section-helper">Keep this focused on the names you want in tomorrow morning’s brief.</p>
+                <form id="watchlist-edit-form" class="form two-column">
+                  <label>
+                    <span>Watchlist name</span>
+                    <input name="name" required />
+                  </label>
                 <label>
                   <span>Description</span>
                   <textarea name="description" rows="2"></textarea>
                 </label>
                 <button class="secondary-button" type="submit">Save watchlist</button>
               </form>
+              <div id="watchlist-action-feedback" class="muted small"></div>
               <form id="symbol-form" class="form compact">
                 <label>
                   <span>Symbol</span>
@@ -145,6 +180,16 @@
                 </label>
                 <button class="primary-button" type="submit">Add symbol</button>
               </form>
+              <div id="sample-symbols" class="sample-symbols hidden">
+                <span class="card-label">Quick add</span>
+                <div class="sample-symbol-list">
+                  <button class="secondary-button sample-symbol-button" type="button" data-symbol="NVDA" data-company-name="NVIDIA Corporation">NVDA</button>
+                  <button class="secondary-button sample-symbol-button" type="button" data-symbol="AMD" data-company-name="Advanced Micro Devices">AMD</button>
+                  <button class="secondary-button sample-symbol-button" type="button" data-symbol="MSFT" data-company-name="Microsoft Corporation">MSFT</button>
+                  <button class="secondary-button sample-symbol-button" type="button" data-symbol="AAPL" data-company-name="Apple Inc.">AAPL</button>
+                  <button class="secondary-button sample-symbol-button" type="button" data-symbol="AMZN" data-company-name="Amazon.com, Inc.">AMZN</button>
+                </div>
+              </div>
               <div id="symbol-list" class="symbol-list"></div>
             </div>
           </section>
@@ -165,6 +210,8 @@
                   <h3>Pipeline runs</h3>
                 </div>
               </div>
+              <div id="runs-loading" class="loading-block">Loading pipeline history...</div>
+              <div id="runs-error" class="error-block hidden"></div>
               <div id="run-list" class="stack"></div>
             </section>
             <section class="panel">

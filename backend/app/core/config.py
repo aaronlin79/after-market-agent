@@ -18,7 +18,7 @@ class Settings(BaseModel):
 
     app_name: str = Field(default="After Market Agent")
     environment: str = Field(default="development")
-    database_url: str = Field(default="postgresql://postgres:postgres@localhost:5432/after_market_agent")
+    database_url: str = Field(default="sqlite:///./after_market_agent.db")
     debug: bool = Field(default=False)
     default_watchlist_name: str = Field(default="Default Watchlist")
     news_provider: str = Field(default="mock")
@@ -40,6 +40,29 @@ class Settings(BaseModel):
     openai_max_retries: int = Field(default=2)
     openai_max_clusters_per_run: int = Field(default=25)
     openai_max_calls_per_run: int = Field(default=25)
+
+    def validate_runtime(self) -> list[str]:
+        """Return non-fatal configuration warnings for the current runtime."""
+
+        warnings: list[str] = []
+
+        if self.news_provider.lower().strip() == "finnhub" and not self.news_api_key:
+            warnings.append("NEWS_PROVIDER is set to finnhub but NEWS_API_KEY is not configured.")
+        if self.email_provider.lower().strip() == "resend" and not self.email_api_key:
+            warnings.append("EMAIL_PROVIDER is set to resend but EMAIL_API_KEY is not configured.")
+        if self.enable_scheduler and not self.secured_scheduled_watchlist():
+            warnings.append("ENABLE_SCHEDULER is true but SCHEDULED_WATCHLIST_ID must be greater than zero.")
+        if self.enable_scheduler and not self.digest_recipients:
+            warnings.append("ENABLE_SCHEDULER is true but DIGEST_RECIPIENTS is empty.")
+        if self.enable_scheduler and self.email_provider.lower().strip() == "resend" and not self.email_api_key:
+            warnings.append("ENABLE_SCHEDULER is true but resend email is not fully configured.")
+
+        return warnings
+
+    def secured_scheduled_watchlist(self) -> bool:
+        """Return whether the configured scheduled watchlist id is valid."""
+
+        return self.scheduled_watchlist_id > 0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -115,6 +138,8 @@ def get_settings() -> Settings:
         bool(settings.openai_api_key),
         settings.openai_model_summary,
     )
+    for warning in settings.validate_runtime():
+        logger.warning("Configuration warning: %s", warning)
     return settings
 
 

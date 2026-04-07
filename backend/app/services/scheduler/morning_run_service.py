@@ -47,6 +47,7 @@ def run_morning_digest_job(
                 db,
                 digest_id=pipeline_stats["digest_id"],
                 settings=resolved_settings,
+                trigger_type=trigger_type,
             )
             emailed = delivery_result["delivery_status"] == "sent"
             delivery_status = delivery_result["delivery_status"]

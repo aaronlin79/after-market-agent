@@ -104,25 +104,32 @@ def run_sec_pipeline(
     resolved_settings = settings or get_settings()
     run = start_pipeline_run(
         db,
-        run_type="full_ingest",
+        run_type="sec_pipeline",
         watchlist_id=watchlist_id,
         trigger_type="manual",
-        provider_used=resolved_settings.news_provider,
+        provider_used="sec",
     )
     end_time = datetime.now(UTC)
     start_time = end_time - timedelta(hours=resolved_settings.ingestion_lookback_hours)
     symbols = get_watchlist_symbols(db, watchlist_id=watchlist_id)
     logger.info("Running SEC ingestion for watchlist_id=%s symbols=%s", watchlist_id, sorted(set(symbols)))
-    return {
-        "watchlist_id": watchlist_id,
-        **ingest_sec_filings(
-            db=db,
-            symbols=symbols,
-            start_time=start_time,
-            end_time=end_time,
-            settings=resolved_settings,
-        ),
-    }
+    try:
+        result = {
+            "watchlist_id": watchlist_id,
+            **ingest_sec_filings(
+                db=db,
+                symbols=symbols,
+                start_time=start_time,
+                end_time=end_time,
+                settings=resolved_settings,
+            ),
+        }
+        complete_pipeline_run(db, run, metrics_json=result, provider_used="sec")
+        return result
+    except Exception as exc:
+        fail_pipeline_run(db, run, error=exc, provider_used="sec")
+        logger.exception("SEC pipeline failed watchlist_id=%s", watchlist_id)
+        raise
 
 
 def run_full_ingestion(
@@ -134,6 +141,13 @@ def run_full_ingestion(
     """Run news and SEC ingestion together with partial failure handling."""
 
     resolved_settings = settings or get_settings()
+    run = start_pipeline_run(
+        db,
+        run_type="full_ingest",
+        watchlist_id=watchlist_id,
+        trigger_type="manual",
+        provider_used=resolved_settings.news_provider,
+    )
     end_time = datetime.now(UTC)
     start_time = end_time - timedelta(hours=resolved_settings.ingestion_lookback_hours)
     symbols = get_watchlist_symbols(db, watchlist_id=watchlist_id)
@@ -192,5 +206,10 @@ def run_full_ingestion(
         "sec_error": sec_error,
     }
     final_status = "partial_success" if news_error or sec_error else "success"
-    complete_pipeline_run(db, run, status=final_status, metrics_json=result, provider_used=news_stats["provider_used"])
-    return result
+    try:
+        complete_pipeline_run(db, run, status=final_status, metrics_json=result, provider_used=news_stats["provider_used"])
+        return result
+    except Exception as exc:
+        fail_pipeline_run(db, run, error=exc, metrics_json=result, provider_used=news_stats["provider_used"])
+        logger.exception("Full ingestion completion failed watchlist_id=%s", watchlist_id)
+        raise
