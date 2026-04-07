@@ -1,6 +1,6 @@
 # Morning Brief — Example
 
-Generated at 7:00 AM PT
+Generated at 6:00 AM PT
 
 ---
 
