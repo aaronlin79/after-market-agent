@@ -2,8 +2,11 @@
 
 from contextlib import asynccontextmanager
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.app.api.routes.admin import router as admin_router
 from backend.app.api.routes.clusters import router as clusters_router
@@ -17,6 +20,8 @@ from backend.app.core.config import get_settings
 from backend.app.services.scheduler.scheduler_service import shutdown_scheduler, start_scheduler_if_enabled
 
 settings = get_settings()
+ROOT_DIR = Path(__file__).resolve().parents[2]
+FRONTEND_DIR = ROOT_DIR / "frontend"
 
 
 def _configure_logging() -> None:
@@ -61,3 +66,13 @@ app.include_router(jobs_router)
 app.include_router(pipelines_router)
 app.include_router(summaries_router)
 app.include_router(watchlists_router)
+
+if FRONTEND_DIR.exists():
+    app.mount("/ui", StaticFiles(directory=FRONTEND_DIR), name="ui")
+
+
+@app.get("/", include_in_schema=False)
+def serve_frontend() -> FileResponse:
+    """Serve the MVP frontend."""
+
+    return FileResponse(FRONTEND_DIR / "index.html")

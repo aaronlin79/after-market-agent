@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 SECTION_ORDER = [
     "Must Know",
     "Watch at Open",
+    "Undercovered but Important",
     "SEC Filings Worth Checking",
     "Likely Noise",
 ]
@@ -130,6 +131,20 @@ def get_digest(db: Session, digest_id: int) -> dict[str, Any] | None:
             select(StoryCluster).where(StoryCluster.id.in_([entry.cluster_id for entry in digest.entries]))
         ).scalars()
     }
+    summary_lookup = {
+        summary.cluster_id: summary
+        for summary in db.execute(
+            select(ClusterSummary).where(
+                ClusterSummary.cluster_id.in_(
+                    [
+                        cluster.cluster_key
+                        for cluster in cluster_lookup.values()
+                    ]
+                )
+            )
+        ).scalars()
+    }
+    article_count_lookup = _article_count_lookup(db)
 
     entries = sorted(digest.entries, key=lambda entry: (SECTION_ORDER.index(entry.section_name), entry.rank))
     return {
@@ -149,6 +164,35 @@ def get_digest(db: Session, digest_id: int) -> dict[str, Any] | None:
                 "rank": entry.rank,
                 "cluster_id": entry.cluster_id,
                 "cluster_key": cluster_lookup[entry.cluster_id].cluster_key if entry.cluster_id in cluster_lookup else None,
+                "representative_title": (
+                    cluster_lookup[entry.cluster_id].representative_title if entry.cluster_id in cluster_lookup else None
+                ),
+                "primary_symbol": (
+                    cluster_lookup[entry.cluster_id].primary_symbol if entry.cluster_id in cluster_lookup else None
+                ),
+                "event_type": cluster_lookup[entry.cluster_id].event_type if entry.cluster_id in cluster_lookup else None,
+                "confidence": cluster_lookup[entry.cluster_id].confidence if entry.cluster_id in cluster_lookup else None,
+                "importance_score": (
+                    cluster_lookup[entry.cluster_id].importance_score if entry.cluster_id in cluster_lookup else None
+                ),
+                "article_count": (
+                    article_count_lookup.get(cluster_lookup[entry.cluster_id].cluster_key, 0)
+                    if entry.cluster_id in cluster_lookup
+                    else 0
+                ),
+                "summary_text": (
+                    summary_lookup[cluster_lookup[entry.cluster_id].cluster_key].summary_text
+                    if entry.cluster_id in cluster_lookup and cluster_lookup[entry.cluster_id].cluster_key in summary_lookup
+                    else None
+                ),
+                "why_it_matters": (
+                    _extract_why_it_matters(
+                        summary_lookup.get(cluster_lookup[entry.cluster_id].cluster_key)
+                    )
+                    if entry.cluster_id in cluster_lookup
+                    else None
+                ),
+                "undercovered_important": entry.section_name == "Undercovered but Important",
                 "rationale_json": entry.rationale_json,
             }
             for entry in entries
@@ -185,6 +229,8 @@ def _build_digest_item(db: Session, cluster: StoryCluster) -> dict[str, Any]:
 
     article_total = len(article_count)
     summary_text = summary.summary_text if summary is not None else "No summary available."
+    why_it_matters = _extract_why_it_matters(summary)
+    undercovered_important = _is_undercovered_important(cluster, article_total)
     return {
         "cluster_id": cluster.id,
         "cluster_key": cluster.cluster_key,
@@ -194,7 +240,9 @@ def _build_digest_item(db: Session, cluster: StoryCluster) -> dict[str, Any]:
         "event_type": cluster.event_type,
         "confidence": cluster.confidence,
         "summary_text": summary_text,
+        "why_it_matters": why_it_matters,
         "article_count": article_total,
+        "undercovered_important": undercovered_important,
         "section_reason": _build_section_reason(cluster, article_total),
     }
 
@@ -202,6 +250,8 @@ def _build_digest_item(db: Session, cluster: StoryCluster) -> dict[str, Any]:
 def _determine_section(item: dict[str, Any]) -> str:
     if item["event_type"] == "sec_filing":
         return "SEC Filings Worth Checking"
+    if item["undercovered_important"]:
+        return "Undercovered but Important"
     if item["importance_score"] < 0.45 or item["confidence"] == "low":
         return "Likely Noise"
     if item["importance_score"] >= 0.75 and item["confidence"] in {"medium", "high"}:
@@ -212,6 +262,8 @@ def _determine_section(item: dict[str, Any]) -> str:
 def _build_section_reason(cluster: StoryCluster, article_count: int) -> str:
     if cluster.event_type == "sec_filing":
         return "Cluster classified as a SEC filing and should be reviewed directly."
+    if _is_undercovered_important(cluster, article_count):
+        return "High-importance story with limited source coverage that could still matter at the open."
     if cluster.importance_score >= 0.75 and cluster.confidence in {"medium", "high"}:
         return "High importance and confidence make this a top pre-market development."
     if cluster.importance_score < 0.45 or cluster.confidence == "low":
@@ -250,6 +302,7 @@ def _render_markdown(run_date: date, sectioned_items: dict[str, list[dict[str, A
                     f"- Importance score: {item['importance_score']:.2f}",
                     f"- Article count: {item['article_count']}",
                     f"- Summary: {item['summary_text']}",
+                    f"- Why it matters: {item['why_it_matters']}",
                     "",
                     "Why it matters:",
                     item["section_reason"],
@@ -280,6 +333,7 @@ def _render_html(run_date: date, sectioned_items: dict[str, list[dict[str, Any]]
                     f"<li>Importance score: {item['importance_score']:.2f}</li>",
                     f"<li>Article count: {item['article_count']}</li>",
                     f"<li>Summary: {item['summary_text']}</li>",
+                    f"<li>Why it matters: {item['why_it_matters']}</li>",
                     "</ul>",
                     f"<p><strong>Why it matters:</strong> {item['section_reason']}</p>",
                 ]
@@ -341,6 +395,7 @@ def _upsert_digest(
                         "confidence": item["confidence"],
                         "event_type": item["event_type"],
                         "article_count": item["article_count"],
+                        "undercovered_important": item["undercovered_important"],
                         "section_reason": item["section_reason"],
                     },
                 )
@@ -350,3 +405,21 @@ def _upsert_digest(
     db.commit()
     db.refresh(digest)
     return digest
+
+
+def _extract_why_it_matters(summary: ClusterSummary | None) -> str:
+    if summary is None or not summary.structured_payload_json:
+        return "Why it matters is not available."
+    value = summary.structured_payload_json.get("why_it_matters")
+    return str(value).strip() if value is not None and str(value).strip() else "Why it matters is not available."
+
+
+def _is_undercovered_important(cluster: StoryCluster, article_count: int) -> bool:
+    return cluster.importance_score >= 0.7 and article_count <= 1
+
+
+def _article_count_lookup(db: Session) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for cluster_id in db.execute(select(SourceItem.cluster_id).where(SourceItem.cluster_id.is_not(None))).scalars():
+        counts[cluster_id] = counts.get(cluster_id, 0) + 1
+    return counts

@@ -146,7 +146,7 @@ def list_ranked_clusters(db: Session) -> list[dict[str, int | float | str | None
         ).scalars()
     )
     summaries = {
-        summary.cluster_id: summary.summary_text
+        summary.cluster_id: summary
         for summary in db.execute(select(ClusterSummary)).scalars()
     }
     article_counts: dict[str, int] = {}
@@ -165,8 +165,13 @@ def list_ranked_clusters(db: Session) -> list[dict[str, int | float | str | None
             "importance_score": cluster.importance_score,
             "event_type": cluster.event_type,
             "confidence": cluster.confidence,
-            "summary_text": summaries.get(cluster.cluster_key),
+            "summary_text": summaries[cluster.cluster_key].summary_text if cluster.cluster_key in summaries else None,
+            "why_it_matters": _extract_why_it_matters(summaries.get(cluster.cluster_key)),
             "article_count": article_counts.get(cluster.cluster_key, 0),
+            "undercovered_important": _is_undercovered_important(
+                cluster.importance_score,
+                article_counts.get(cluster.cluster_key, 0),
+            ),
         }
         for cluster in clusters
     ]
@@ -226,3 +231,17 @@ def _assign_confidence(article_count: int, credibility_score: float, event_type:
     if credibility_score >= 0.6 or article_count >= 2 or event_type in {"earnings", "guidance", "sec_filing", "m_and_a"}:
         return "medium"
     return "low"
+
+
+def _extract_why_it_matters(summary: ClusterSummary | None) -> str | None:
+    if summary is None or not summary.structured_payload_json:
+        return None
+    value = summary.structured_payload_json.get("why_it_matters")
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _is_undercovered_important(importance_score: float, article_count: int) -> bool:
+    return importance_score >= 0.7 and article_count <= 1
