@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.config import Settings, get_settings
 from backend.app.models import Digest
 from backend.app.services.email.base import BaseEmailProvider
+from backend.app.services.email.brevo_provider import BrevoEmailProvider
 from backend.app.services.email.mock_provider import MockEmailProvider
 from backend.app.services.observability.pipeline_tracker import complete_pipeline_run, fail_pipeline_run, start_pipeline_run
 from backend.app.services.email.resend_provider import ResendEmailProvider
@@ -99,6 +100,16 @@ def _get_email_provider(settings: Settings) -> BaseEmailProvider:
     provider_name = settings.email_provider.lower().strip()
     if provider_name == "mock":
         return MockEmailProvider()
+    if provider_name == "brevo":
+        return BrevoEmailProvider(
+            api_key=settings.brevo_api_key or "",
+            from_address=settings.email_from,
+            from_name=settings.email_from_name,
+        )
     if provider_name == "resend":
-        return ResendEmailProvider(api_key=settings.email_api_key or "", from_address=settings.email_from)
+        return ResendEmailProvider(
+            api_key=settings.resend_api_key or "",
+            from_address=settings.email_from,
+            from_name=settings.email_from_name,
+        )
     raise ValueError(f"Unsupported EMAIL_PROVIDER: {settings.email_provider}")

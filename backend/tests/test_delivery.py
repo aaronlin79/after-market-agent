@@ -17,7 +17,9 @@ from backend.app.main import app
 from backend.app.models import ClusterSummary, Digest, StoryCluster, Watchlist, WatchlistSymbol
 from backend.app.models.base import Base
 from backend.app.services.digest.digest_service import generate_morning_digest
-from backend.app.services.email.email_service import send_digest_email
+from backend.app.services.email.brevo_provider import BrevoEmailProvider
+from backend.app.services.email.email_service import _get_email_provider, send_digest_email
+from backend.app.services.email.resend_provider import ResendEmailProvider
 from backend.app.services.scheduler.scheduler_service import is_scheduler_running, shutdown_scheduler, start_scheduler_if_enabled
 
 
@@ -157,6 +159,82 @@ def test_invalid_email_provider_config_fails_clearly(db_session: Session) -> Non
 
     with pytest.raises(ValueError, match="Unsupported EMAIL_PROVIDER"):
         send_digest_email(db_session, digest_id=digest_id, settings=settings)
+
+
+def test_provider_selection_uses_brevo_by_default() -> None:
+    settings = Settings(
+        email_provider="brevo",
+        brevo_api_key="brevo-key",
+        resend_api_key="resend-key",
+        email_from="digest@example.com",
+        email_from_name="After Market Agent",
+        digest_recipients=["alice@example.com"],
+    )
+
+    provider = _get_email_provider(settings)
+
+    assert isinstance(provider, BrevoEmailProvider)
+
+
+def test_missing_brevo_api_key_fails_clearly() -> None:
+    settings = Settings(
+        email_provider="brevo",
+        brevo_api_key=None,
+        email_from="digest@example.com",
+        email_from_name="After Market Agent",
+        digest_recipients=["alice@example.com"],
+    )
+
+    with pytest.raises(ValueError, match="BREVO_API_KEY"):
+        _get_email_provider(settings)
+
+
+def test_preserved_resend_path_is_selectable() -> None:
+    settings = Settings(
+        email_provider="resend",
+        resend_api_key="resend-key",
+        email_from="digest@example.com",
+        email_from_name="After Market Agent",
+        digest_recipients=["alice@example.com"],
+    )
+
+    provider = _get_email_provider(settings)
+
+    assert isinstance(provider, ResendEmailProvider)
+
+
+def test_successful_brevo_send_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyResponse:
+        def __enter__(self) -> "DummyResponse":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"messageId":"brevo-message-123"}'
+
+    def fake_urlopen(_request):
+        return DummyResponse()
+
+    monkeypatch.setattr("backend.app.services.email.brevo_provider.request.urlopen", fake_urlopen)
+
+    provider = BrevoEmailProvider(
+        api_key="brevo-key",
+        from_address="digest@example.com",
+        from_name="After Market Agent",
+    )
+
+    result = provider.send_email(
+        to=["alice@example.com"],
+        subject="Morning Brief",
+        html="<p>Hello</p>",
+        text="Hello",
+    )
+
+    assert result["provider"] == "brevo"
+    assert result["status"] == "sent"
+    assert result["message_id"] == "brevo-message-123"
 
 
 def test_manual_morning_run_endpoint_executes_end_to_end(client: TestClient, db_session: Session) -> None:

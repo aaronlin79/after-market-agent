@@ -122,9 +122,14 @@ def _validate_settings(settings: Settings) -> None:
         missing.append("NEWS_API_KEY")
     if not settings.sec_user_agent:
         missing.append("SEC_USER_AGENT")
+    if settings.email_provider.lower().strip() == "brevo":
+        if not settings.brevo_api_key:
+            missing.append("BREVO_API_KEY")
+        if not settings.email_from:
+            missing.append("EMAIL_FROM")
     if settings.email_provider.lower().strip() == "resend":
-        if not settings.email_api_key:
-            missing.append("EMAIL_API_KEY")
+        if not settings.resend_api_key:
+            missing.append("RESEND_API_KEY")
         if not settings.email_from:
             missing.append("EMAIL_FROM")
     if settings.openai_api_key is None or not settings.openai_api_key.strip():

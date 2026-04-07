@@ -26,9 +26,12 @@ class Settings(BaseModel):
     sec_user_agent: str | None = Field(default=None)
     sec_api_key: str | None = Field(default=None)
     ingestion_lookback_hours: int = Field(default=24)
-    email_provider: str = Field(default="mock")
+    email_provider: str = Field(default="brevo")
     email_api_key: str | None = Field(default=None)
+    brevo_api_key: str | None = Field(default=None)
+    resend_api_key: str | None = Field(default=None)
     email_from: str = Field(default="digest@example.com")
+    email_from_name: str = Field(default="After Market Agent")
     digest_recipients: list[str] = Field(default_factory=lambda: ["digest@example.com"])
     digest_timezone: str = Field(default="America/Los_Angeles")
     digest_send_hour: int = Field(default=6)
@@ -48,14 +51,19 @@ class Settings(BaseModel):
 
         if self.news_provider.lower().strip() == "finnhub" and not self.news_api_key:
             warnings.append("NEWS_PROVIDER is set to finnhub but NEWS_API_KEY is not configured.")
-        if self.email_provider.lower().strip() == "resend" and not self.email_api_key:
-            warnings.append("EMAIL_PROVIDER is set to resend but EMAIL_API_KEY is not configured.")
+        provider = self.email_provider.lower().strip()
+        if provider == "brevo" and not self.brevo_api_key:
+            warnings.append("EMAIL_PROVIDER is set to brevo but BREVO_API_KEY is not configured.")
+        if provider == "resend" and not self.resend_api_key:
+            warnings.append("EMAIL_PROVIDER is set to resend but RESEND_API_KEY is not configured.")
         if self.enable_scheduler and not self.secured_scheduled_watchlist():
             warnings.append("ENABLE_SCHEDULER is true but SCHEDULED_WATCHLIST_ID must be greater than zero.")
         if self.enable_scheduler and not self.digest_recipients:
             warnings.append("ENABLE_SCHEDULER is true but DIGEST_RECIPIENTS is empty.")
-        if self.enable_scheduler and self.email_provider.lower().strip() == "resend" and not self.email_api_key:
+        if self.enable_scheduler and provider == "resend" and not self.resend_api_key:
             warnings.append("ENABLE_SCHEDULER is true but resend email is not fully configured.")
+        if self.enable_scheduler and provider == "brevo" and not self.brevo_api_key:
+            warnings.append("ENABLE_SCHEDULER is true but brevo email is not fully configured.")
 
         return warnings
 
@@ -86,7 +94,16 @@ class Settings(BaseModel):
             ),
             email_provider=_get_env_or_default("EMAIL_PROVIDER", cls.model_fields["email_provider"].default),
             email_api_key=getenv("EMAIL_API_KEY", cls.model_fields["email_api_key"].default),
+            brevo_api_key=_get_env_from_names_or_default(
+                ("BREVO_API_KEY", "EMAIL_API_KEY"),
+                cls.model_fields["brevo_api_key"].default,
+            ),
+            resend_api_key=_get_env_from_names_or_default(
+                ("RESEND_API_KEY", "EMAIL_API_KEY"),
+                cls.model_fields["resend_api_key"].default,
+            ),
             email_from=_get_env_or_default("EMAIL_FROM", cls.model_fields["email_from"].default),
+            email_from_name=_get_env_or_default("EMAIL_FROM_NAME", cls.model_fields["email_from_name"].default),
             digest_recipients=_parse_recipients(
                 getenv("DIGEST_RECIPIENTS", ",".join(cls.model_fields["digest_recipients"].default_factory()))
             ),

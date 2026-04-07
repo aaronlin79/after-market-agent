@@ -3,28 +3,33 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 from urllib import request
 from urllib.error import HTTPError, URLError
 
 from backend.app.services.email.base import BaseEmailProvider
 
+logger = logging.getLogger(__name__)
+
 
 class ResendEmailProvider(BaseEmailProvider):
     """Send email with Resend."""
 
-    def __init__(self, api_key: str, from_address: str) -> None:
+    def __init__(self, api_key: str, from_address: str, from_name: str | None = None) -> None:
         if not api_key:
-            raise ValueError("EMAIL_API_KEY is required when EMAIL_PROVIDER is set to resend.")
+            raise ValueError("RESEND_API_KEY is required when EMAIL_PROVIDER is set to resend.")
         if not from_address:
             raise ValueError("EMAIL_FROM is required when EMAIL_PROVIDER is set to resend.")
         self.api_key = api_key
         self.from_address = from_address
+        self.from_name = from_name or "After Market Agent"
 
     def send_email(self, to: list[str], subject: str, html: str, text: str) -> dict[str, Any]:
+        logger.info("Resend email send start provider=resend recipients=%s subject=%s", to, subject)
         payload = json.dumps(
             {
-                "from": self.from_address,
+                "from": f"{self.from_name} <{self.from_address}>",
                 "to": to,
                 "subject": subject,
                 "html": html,
@@ -48,6 +53,7 @@ class ResendEmailProvider(BaseEmailProvider):
         except URLError as exc:
             raise RuntimeError("Resend email send failed due to a network error.") from exc
 
+        logger.info("Resend email send success provider=resend recipients=%s subject=%s", to, subject)
         return {
             "provider": "resend",
             "recipient_count": len(to),
