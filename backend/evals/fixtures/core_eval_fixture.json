@@ -1,0 +1,85 @@
+{
+  "clustering": [
+    {
+      "article_id": "a1",
+      "text": "NVIDIA raises guidance after stronger data center demand.",
+      "expected_cluster": "cluster_nvda_guidance"
+    },
+    {
+      "article_id": "a2",
+      "text": "NVIDIA lifts outlook as data center demand stays strong.",
+      "expected_cluster": "cluster_nvda_guidance"
+    },
+    {
+      "article_id": "a3",
+      "text": "AMD unveils a new AI accelerator product line.",
+      "expected_cluster": "cluster_amd_product"
+    }
+  ],
+  "event_classification": [
+    {
+      "text": "Microsoft reports quarterly earnings and raises guidance.",
+      "expected_label": "earnings"
+    },
+    {
+      "text": "Apple files an 8-K with the SEC.",
+      "expected_label": "sec_filing"
+    },
+    {
+      "text": "Tesla launches a new lower-cost vehicle platform.",
+      "expected_label": "product_launch"
+    }
+  ],
+  "ranking": [
+    {
+      "cluster_id": "r1",
+      "text": "NVIDIA raises guidance after quarterly earnings.",
+      "source_name": "MockWire",
+      "article_count": 3,
+      "first_seen_at": "2026-04-06T05:00:00Z",
+      "expected_rank_group": 1
+    },
+    {
+      "cluster_id": "r2",
+      "text": "AMD shares mentioned in overnight analyst commentary.",
+      "source_name": "StreetDesk",
+      "article_count": 1,
+      "first_seen_at": "2026-04-05T18:00:00Z",
+      "expected_rank_group": 2
+    }
+  ],
+  "summary_grounding": [
+    {
+      "output": {
+        "headline": "NVIDIA guidance improved",
+        "summary_bullets": [
+          "Management raised guidance."
+        ],
+        "why_it_matters": "This affects the near-term demand outlook.",
+        "confidence": "high",
+        "unknowns": [
+          "No full transcript was provided."
+        ],
+        "cited_source_indices": [
+          0
+        ]
+      },
+      "source_count": 1
+    },
+    {
+      "output": {
+        "headline": "AMD commentary was mixed",
+        "summary_bullets": [
+          "Analyst commentary was mixed."
+        ],
+        "why_it_matters": "Signals remain noisy.",
+        "confidence": "low",
+        "unknowns": [],
+        "cited_source_indices": [
+          5
+        ]
+      },
+      "source_count": 1
+    }
+  ]
+}
