@@ -27,7 +27,7 @@ jobs:
       DEFAULT_WATCHLIST_NAME: Core Watchlist
       NEWS_PROVIDER: finnhub
       INGESTION_LOOKBACK_HOURS: "24"
-      EMAIL_PROVIDER: resend
+      EMAIL_PROVIDER: brevo
       DIGEST_TIMEZONE: America/Los_Angeles
       DIGEST_SEND_HOUR: "6"
       ENABLE_SCHEDULER: "false"
@@ -40,8 +40,10 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
-      EMAIL_API_KEY: ${{ secrets.EMAIL_API_KEY }}
+      BREVO_API_KEY: ${{ secrets.EMAIL_API_KEY }}
+      RESEND_API_KEY: ${{ secrets.EMAIL_API_KEY }}
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      EMAIL_FROM_NAME: After Market Agent
       DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
     steps:
       - name: Check out repository
@@ -80,7 +82,7 @@ jobs:
             OPENAI_API_KEY
             NEWS_API_KEY
             SEC_USER_AGENT
-            EMAIL_API_KEY
+            BREVO_API_KEY
             EMAIL_FROM
             DIGEST_RECIPIENTS
           )

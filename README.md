@@ -26,7 +26,7 @@ SEC-only ingestion is available at `POST /pipelines/sec/run`.
 Combined news + SEC ingestion is available at `POST /pipelines/full-ingest`.
 Manual news clustering is available at `POST /pipelines/news/cluster`.
 Digest generation is available at `POST /digests/generate`.
-Digest send uses `POST /digests/{digest_id}/send` and defaults to the mock provider locally.
+Digest send uses `POST /digests/{digest_id}/send`. The MVP email provider is Brevo, with mock still available locally and Resend preserved as an alternate provider.
 The full manual morning run is available at `POST /jobs/morning-run`.
 Set `ENABLE_SCHEDULER=true` to enable the daily in-process scheduler.
 Set `OPENAI_API_KEY` to enable OpenAI-backed cluster summaries; otherwise the baseline summarizer is used.
@@ -72,7 +72,8 @@ Minimum `.env` setup for a safe local MVP:
 
 - `DATABASE_URL=sqlite:///./after_market_agent.db`
 - `NEWS_PROVIDER=mock` for offline/local testing, or `NEWS_PROVIDER=finnhub` with `NEWS_API_KEY`
-- `EMAIL_PROVIDER=mock` for local testing, or `EMAIL_PROVIDER=resend` with `EMAIL_API_KEY`
+- `EMAIL_PROVIDER=mock` for local testing, or `EMAIL_PROVIDER=brevo` with `BREVO_API_KEY`
+- `EMAIL_PROVIDER=resend` remains available with `RESEND_API_KEY`
 - `DIGEST_RECIPIENTS=you@example.com`
 - `SEC_USER_AGENT=after-market-agent your-email@example.com` if you want SEC ingestion enabled
 - `OPENAI_API_KEY=` to enable OpenAI summaries, otherwise baseline fallback is used
@@ -105,7 +106,7 @@ The automated workflow lives at `.github/workflows/daily-brief.yml`.
   - `OPENAI_API_KEY`
   - `NEWS_API_KEY`
   - `SEC_USER_AGENT`
-  - `EMAIL_API_KEY`
+  - `EMAIL_API_KEY` mapped to Brevo in the current MVP workflow
   - `EMAIL_FROM`
   - `DIGEST_RECIPIENTS`
 - The workflow disables the in-app scheduler with `ENABLE_SCHEDULER=false` because GitHub Actions is the scheduler
