@@ -1,0 +1,11 @@
+{
+  "name": "after-market-agent-scripts",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "daily": "python -m backend.scripts.run_daily_brief",
+    "smoke": "python -m backend.scripts.smoke_check"
+  }
+}

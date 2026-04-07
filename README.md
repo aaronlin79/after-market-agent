@@ -60,6 +60,12 @@ Seed the default watchlist:
 python -m backend.scripts.seed_watchlist
 ```
 
+Headless daily brief command:
+
+```bash
+npm run daily
+```
+
 ## Run Tonight
 
 Minimum `.env` setup for a safe local MVP:
@@ -88,3 +94,20 @@ If you want to leave it overnight:
 - set `SCHEDULED_WATCHLIST_ID`
 - use `EMAIL_PROVIDER=mock` for a dry run, or a configured real provider if you want delivery
 - check the dashboard and `/admin/pipeline-runs` once before you leave it running
+
+## GitHub Actions
+
+The automated workflow lives at `.github/workflows/daily-brief.yml`.
+
+- Manual run: open the `Daily Brief` workflow in the GitHub Actions tab and use `Run workflow`
+- Headless command run by the workflow: `npm run daily`
+- Expected GitHub secrets:
+  - `OPENAI_API_KEY`
+  - `NEWS_API_KEY`
+  - `SEC_USER_AGENT`
+  - `EMAIL_API_KEY`
+  - `EMAIL_FROM`
+  - `DIGEST_RECIPIENTS`
+- The workflow disables the in-app scheduler with `ENABLE_SCHEDULER=false` because GitHub Actions is the scheduler
+- The workflow targets `6:00 AM America/Los_Angeles` by triggering at both `13:00 UTC` and `14:00 UTC`, then only continuing when the runner’s Los Angeles local time is actually `06`
+- Check run details and logs in the GitHub Actions tab if a scheduled or manual run fails

@@ -1,0 +1,136 @@
+name: Daily Brief
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 13:00 UTC catches 6:00 AM America/Los_Angeles during PDT.
+    - cron: "0 13 * * *"
+    # 14:00 UTC catches 6:00 AM America/Los_Angeles during PST.
+    - cron: "0 14 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-brief
+  cancel-in-progress: false
+
+jobs:
+  daily-brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      APP_NAME: After Market Agent
+      ENVIRONMENT: production
+      DATABASE_URL: sqlite:///./after_market_agent_ci.db
+      DEBUG: "false"
+      DEFAULT_WATCHLIST_NAME: Core Watchlist
+      NEWS_PROVIDER: finnhub
+      INGESTION_LOOKBACK_HOURS: "24"
+      EMAIL_PROVIDER: resend
+      DIGEST_TIMEZONE: America/Los_Angeles
+      DIGEST_SEND_HOUR: "6"
+      ENABLE_SCHEDULER: "false"
+      SCHEDULED_WATCHLIST_ID: "1"
+      OPENAI_MODEL_SUMMARY: gpt-5-mini
+      OPENAI_TIMEOUT_SECONDS: "30"
+      OPENAI_MAX_RETRIES: "2"
+      OPENAI_MAX_CLUSTERS_PER_RUN: "25"
+      OPENAI_MAX_CALLS_PER_RUN: "25"
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      EMAIL_API_KEY: ${{ secrets.EMAIL_API_KEY }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node for npm script wrapper
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Gate scheduled runs to 6:00 AM America/Los_Angeles
+        id: schedule_gate
+        shell: bash
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
+            pt_hour="$(TZ=America/Los_Angeles date +%H)"
+            echo "Current America/Los_Angeles hour: ${pt_hour}"
+            if [ "${pt_hour}" != "06" ]; then
+              echo "This UTC slot does not map to 6:00 AM PT today. Skipping."
+              echo "should_run=false" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+          fi
+          echo "should_run=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate required secrets and environment
+        if: steps.schedule_gate.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          required_vars=(
+            OPENAI_API_KEY
+            NEWS_API_KEY
+            SEC_USER_AGENT
+            EMAIL_API_KEY
+            EMAIL_FROM
+            DIGEST_RECIPIENTS
+          )
+
+          missing=()
+          for var_name in "${required_vars[@]}"; do
+            if [ -z "${!var_name:-}" ]; then
+              missing+=("${var_name}")
+            fi
+          done
+
+          if [ "${DIGEST_SEND_HOUR}" != "6" ]; then
+            echo "DIGEST_SEND_HOUR must be 6. Current value: ${DIGEST_SEND_HOUR}"
+            exit 1
+          fi
+
+          if [ "${DIGEST_TIMEZONE}" != "America/Los_Angeles" ]; then
+            echo "DIGEST_TIMEZONE must be America/Los_Angeles. Current value: ${DIGEST_TIMEZONE}"
+            exit 1
+          fi
+
+          if [ "${ENABLE_SCHEDULER}" != "false" ]; then
+            echo "ENABLE_SCHEDULER must be false in GitHub Actions."
+            exit 1
+          fi
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "Missing required configuration: ${missing[*]}"
+            exit 1
+          fi
+
+          echo "Environment validation passed."
+
+      - name: Install Python dependencies
+        if: steps.schedule_gate.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Run database migrations
+        if: steps.schedule_gate.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          echo "Running migrations against ${DATABASE_URL}"
+          alembic upgrade head
+
+      - name: Execute daily brief
+        if: steps.schedule_gate.outputs.should_run == 'true'
+        shell: bash
+        run: |
+          echo "Running daily brief with NEWS_PROVIDER=${NEWS_PROVIDER}, EMAIL_PROVIDER=${EMAIL_PROVIDER}, DIGEST_TIMEZONE=${DIGEST_TIMEZONE}, DIGEST_SEND_HOUR=${DIGEST_SEND_HOUR}"
+          npm run daily
