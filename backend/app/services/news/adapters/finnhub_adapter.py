@@ -77,6 +77,7 @@ class FinnhubNewsAdapter(BaseNewsAdapter):
                         "metadata_json": {
                             "provider": "finnhub",
                             "symbol": symbol,
+                            "symbols": [symbol],
                             "category": raw_item.get("category"),
                             "image": raw_item.get("image"),
                             "related": raw_item.get("related"),

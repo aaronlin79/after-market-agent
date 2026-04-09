@@ -199,14 +199,33 @@ def _select_primary_symbol(articles: list[SourceItem]) -> str:
     symbol_counts: dict[str, int] = {}
     for article in articles:
         metadata = article.metadata_json or {}
-        metadata_symbols = metadata.get("symbols", [])
-        if isinstance(metadata_symbols, list):
-            for value in metadata_symbols:
-                symbol = str(value).strip().upper()
-                if symbol:
-                    symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
+        for symbol in _extract_symbols_from_metadata(metadata):
+            symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
 
     if not symbol_counts:
         return "UNKNOWN"
 
     return min(symbol_counts.items(), key=lambda item: (-item[1], item[0]))[0]
+
+
+def _extract_symbols_from_metadata(metadata: dict[str, object]) -> set[str]:
+    values: list[str] = []
+    metadata_symbols = metadata.get("symbols")
+    if isinstance(metadata_symbols, list):
+        values.extend(str(value) for value in metadata_symbols)
+
+    for key in ("symbol", "ticker"):
+        value = metadata.get(key)
+        if value is not None:
+            values.append(str(value))
+
+    related = metadata.get("related")
+    if isinstance(related, str):
+        values.extend(part.strip() for part in related.split(","))
+
+    normalized: set[str] = set()
+    for value in values:
+        symbol = str(value).strip().upper()
+        if symbol:
+            normalized.add(symbol)
+    return normalized

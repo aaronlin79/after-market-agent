@@ -192,12 +192,9 @@ def _compute_watchlist_relevance(
     mentioned_symbols: set[str] = set()
     for article in articles:
         metadata = article.metadata_json or {}
-        values = metadata.get("symbols", [])
-        if isinstance(values, list):
-            for value in values:
-                symbol = str(value).strip().upper()
-                if symbol in watchlist_symbols:
-                    mentioned_symbols.add(symbol)
+        for symbol in _extract_symbols_from_metadata(metadata):
+            if symbol in watchlist_symbols:
+                mentioned_symbols.add(symbol)
 
     score += min(len(mentioned_symbols) * 0.15, 0.3)
     return min(score, 1.0)
@@ -255,3 +252,26 @@ def _extract_unknowns(summary: ClusterSummary | None) -> list[str]:
 
 def _is_undercovered_important(importance_score: float, article_count: int) -> bool:
     return importance_score >= 0.7 and article_count <= 1
+
+
+def _extract_symbols_from_metadata(metadata: dict[str, object]) -> set[str]:
+    values: list[str] = []
+    metadata_symbols = metadata.get("symbols")
+    if isinstance(metadata_symbols, list):
+        values.extend(str(value) for value in metadata_symbols)
+
+    for key in ("symbol", "ticker"):
+        value = metadata.get(key)
+        if value is not None:
+            values.append(str(value))
+
+    related = metadata.get("related")
+    if isinstance(related, str):
+        values.extend(part.strip() for part in related.split(","))
+
+    normalized: set[str] = set()
+    for value in values:
+        symbol = str(value).strip().upper()
+        if symbol:
+            normalized.add(symbol)
+    return normalized
