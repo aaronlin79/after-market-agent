@@ -26,7 +26,12 @@ class ResendEmailProvider(BaseEmailProvider):
         self.from_name = from_name or "After Market Agent"
 
     def send_email(self, to: list[str], subject: str, html: str, text: str) -> dict[str, Any]:
-        logger.info("Resend email send start provider=resend recipients=%s subject=%s", to, subject)
+        logger.info(
+            "Resend email send start provider=resend sender=%s recipients=%s subject=%s",
+            self.from_address,
+            to,
+            subject,
+        )
         payload = json.dumps(
             {
                 "from": f"{self.from_name} <{self.from_address}>",
@@ -42,6 +47,7 @@ class ResendEmailProvider(BaseEmailProvider):
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": "after-hours-agent/1.0",
             },
             method="POST",
         )
@@ -49,7 +55,16 @@ class ResendEmailProvider(BaseEmailProvider):
             with request.urlopen(http_request) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
-            raise RuntimeError(f"Resend email send failed with status {exc.code}.") from exc
+            error_body = _read_error_body(exc)
+            logger.error(
+                "Resend email send failed provider=resend sender=%s status=%s body=%s",
+                self.from_address,
+                exc.code,
+                error_body or "<empty>",
+            )
+            raise RuntimeError(
+                f"Resend email send failed with status {exc.code}. {error_body}".strip()
+            ) from exc
         except URLError as exc:
             raise RuntimeError("Resend email send failed due to a network error.") from exc
 
@@ -60,3 +75,11 @@ class ResendEmailProvider(BaseEmailProvider):
             "message_id": data.get("id"),
             "status": "sent",
         }
+
+
+def _read_error_body(error: HTTPError) -> str:
+    try:
+        payload = error.read().decode("utf-8").strip()
+    except Exception:
+        return ""
+    return payload
