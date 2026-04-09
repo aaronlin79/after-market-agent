@@ -37,7 +37,7 @@ def generate_morning_digest(db: Session, watchlist_id: int) -> dict[str, Any]:
         if watchlist is None:
             raise ValueError(f"Watchlist {watchlist_id} was not found.")
 
-        watchlist_symbols = {symbol.symbol for symbol in watchlist.symbols}
+        watchlist_symbols = {symbol.symbol.strip().upper() for symbol in watchlist.symbols if symbol.symbol.strip()}
         ranked_clusters = _load_ranked_clusters_for_watchlist(db, watchlist_symbols)
         digest_items = [_build_digest_item(db, cluster) for cluster in ranked_clusters]
 
@@ -223,7 +223,74 @@ def _load_ranked_clusters_for_watchlist(db: Session, watchlist_symbols: set[str]
             )
         ).scalars()
     )
-    return [cluster for cluster in clusters if cluster.primary_symbol in watchlist_symbols]
+    if not clusters:
+        logger.info(
+            "Digest candidate scan ranked_loaded=0 with_summaries=0 watchlist_matches=0 after_score_filter=0 "
+            "watchlist_symbols=%s exclusions={}",
+            sorted(watchlist_symbols),
+        )
+        return []
+
+    cluster_keys = [cluster.cluster_key for cluster in clusters]
+    summaries = {
+        summary.cluster_id: summary
+        for summary in db.execute(
+            select(ClusterSummary).where(ClusterSummary.cluster_id.in_(cluster_keys))
+        ).scalars()
+    }
+    source_items_by_cluster: dict[str, list[SourceItem]] = defaultdict(list)
+    for source_item in db.execute(
+        select(SourceItem).where(SourceItem.cluster_id.in_(cluster_keys))
+    ).scalars():
+        if source_item.cluster_id is not None:
+            source_items_by_cluster[source_item.cluster_id].append(source_item)
+
+    matching_clusters: list[StoryCluster] = []
+    exclusion_counts: dict[str, int] = defaultdict(int)
+    exclusion_examples: list[dict[str, Any]] = []
+    with_summaries_count = 0
+    matching_with_summaries_count = 0
+
+    for cluster in clusters:
+        primary_symbol = (cluster.primary_symbol or "").strip().upper()
+        article_symbols = _extract_cluster_symbols(source_items_by_cluster.get(cluster.cluster_key, []))
+        summary_present = cluster.cluster_key in summaries
+        if summary_present:
+            with_summaries_count += 1
+
+        matches_watchlist = primary_symbol in watchlist_symbols or bool(article_symbols & watchlist_symbols)
+        if not matches_watchlist:
+            exclusion_counts["watchlist_symbol_mismatch"] += 1
+            if len(exclusion_examples) < 5:
+                exclusion_examples.append(
+                    {
+                        "cluster_key": cluster.cluster_key,
+                        "primary_symbol": primary_symbol or None,
+                        "article_symbols": sorted(article_symbols),
+                        "summary_present": summary_present,
+                        "importance_score": cluster.importance_score,
+                    }
+                )
+            continue
+
+        matching_clusters.append(cluster)
+        if summary_present:
+            matching_with_summaries_count += 1
+
+    logger.info(
+        "Digest candidate scan ranked_loaded=%s with_summaries=%s watchlist_matches=%s "
+        "matching_with_summaries=%s after_score_filter=%s watchlist_symbols=%s exclusions=%s",
+        len(clusters),
+        with_summaries_count,
+        len(matching_clusters),
+        matching_with_summaries_count,
+        len(matching_clusters),
+        sorted(watchlist_symbols),
+        dict(exclusion_counts),
+    )
+    if exclusion_examples:
+        logger.info("Digest exclusion examples: %s", exclusion_examples)
+    return matching_clusters
 
 
 def _build_digest_item(db: Session, cluster: StoryCluster) -> dict[str, Any]:
@@ -439,3 +506,34 @@ def _article_count_lookup(db: Session) -> dict[str, int]:
     for cluster_id in db.execute(select(SourceItem.cluster_id).where(SourceItem.cluster_id.is_not(None))).scalars():
         counts[cluster_id] = counts.get(cluster_id, 0) + 1
     return counts
+
+
+def _extract_cluster_symbols(source_items: list[SourceItem]) -> set[str]:
+    symbols: set[str] = set()
+    for source_item in source_items:
+        metadata = source_item.metadata_json or {}
+        symbols.update(_extract_symbols_from_metadata(metadata))
+    return symbols
+
+
+def _extract_symbols_from_metadata(metadata: dict[str, Any]) -> set[str]:
+    values: list[str] = []
+    metadata_symbols = metadata.get("symbols")
+    if isinstance(metadata_symbols, list):
+        values.extend(str(value) for value in metadata_symbols)
+
+    for key in ("symbol", "ticker"):
+        value = metadata.get(key)
+        if value is not None:
+            values.append(str(value))
+
+    related = metadata.get("related")
+    if isinstance(related, str):
+        values.extend(part.strip() for part in related.split(","))
+
+    normalized: set[str] = set()
+    for value in values:
+        symbol = str(value).strip().upper()
+        if symbol:
+            normalized.add(symbol)
+    return normalized

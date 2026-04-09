@@ -215,6 +215,7 @@ def _extract_recent_filings(
         metadata_json = {
             "provider": "sec",
             "ticker": symbol,
+            "symbols": [symbol],
             "company_name": company_info["company_name"],
             "cik": company_info["cik"],
             "accession_number": accession_number,
