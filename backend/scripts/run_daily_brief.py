@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, date, datetime
 from os import getenv
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
 from sqlalchemy import select
 
 from backend.app.core.config import Settings, get_settings
 from backend.app.core.db import SessionLocal
-from backend.app.models import Watchlist
+from backend.app.models import Digest, Watchlist
 from backend.app.pipelines.news_pipeline import run_full_ingestion
 from backend.app.services.clustering.clustering_service import cluster_articles
 from backend.app.services.digest.digest_service import generate_morning_digest
@@ -45,14 +48,46 @@ def main() -> None:
 
     try:
         watchlist_id = _resolve_watchlist_id(db, settings)
+        business_now = _business_now(settings)
+        business_date = business_now.date()
         logger.info(
-            "Daily brief run starting watchlist_id=%s trigger_type=%s news_provider=%s email_provider=%s summary_model=%s",
+            "Daily brief run starting watchlist_id=%s trigger_type=%s news_provider=%s email_provider=%s summary_model=%s business_time=%s",
             watchlist_id,
             trigger_type,
             settings.news_provider,
             settings.email_provider,
             settings.openai_model_summary,
+            business_now.isoformat(),
         )
+
+        sent_digest = _find_sent_digest_for_business_date(db, watchlist_id, settings)
+        if sent_digest is not None:
+            result = {
+                "watchlist_id": watchlist_id,
+                "trigger_type": trigger_type,
+                "business_date": business_date.isoformat(),
+                "skipped": True,
+                "skip_reason": "already_sent_today",
+                "digest_id": sent_digest.id,
+                "delivery_status": sent_digest.delivery_status,
+                "sent_at": sent_digest.sent_at.isoformat() if sent_digest.sent_at else None,
+                "email_provider": settings.email_provider,
+            }
+            logger.info(
+                "Daily brief run skipped watchlist_id=%s business_date=%s reason=already_sent_today digest_id=%s",
+                watchlist_id,
+                business_date.isoformat(),
+                sent_digest.id,
+            )
+            complete_pipeline_run(
+                db,
+                run,
+                status="success",
+                metrics_json=result,
+                provider_used=settings.news_provider,
+            )
+            print(json.dumps(result, indent=2))
+            return
 
         ingest_stats = run_full_ingestion(db, watchlist_id=watchlist_id, settings=settings)
         if ingest_stats["news_error"] and ingest_stats["sec_error"]:
@@ -72,6 +107,8 @@ def main() -> None:
         result = {
             "watchlist_id": watchlist_id,
             "trigger_type": trigger_type,
+            "business_date": business_date.isoformat(),
+            "skipped": False,
             "news_fetched_count": ingest_stats["news_fetched_count"],
             "news_inserted_count": ingest_stats["news_inserted_count"],
             "filing_fetched_count": ingest_stats["filing_fetched_count"],
@@ -144,6 +181,27 @@ def _resolve_trigger_type() -> str:
     if event_name == "schedule":
         return "scheduled"
     return "manual"
+
+
+def _business_now(settings: Settings) -> datetime:
+    return datetime.now(ZoneInfo(settings.digest_timezone))
+
+
+def _find_sent_digest_for_business_date(db, watchlist_id: int, settings: Settings) -> Digest | None:
+    business_date = _business_now(settings).date()
+    digests = db.execute(
+        select(Digest)
+        .where(Digest.watchlist_id == watchlist_id, Digest.sent_at.is_not(None))
+        .order_by(Digest.sent_at.desc(), Digest.id.desc())
+    ).scalars()
+
+    for digest in digests:
+        if digest.sent_at is None:
+            continue
+        sent_at = digest.sent_at.astimezone(ZoneInfo(settings.digest_timezone))
+        if sent_at.date() == business_date:
+            return digest
+    return None
 
 
 def _resolve_watchlist_id(db, settings: Settings) -> int:

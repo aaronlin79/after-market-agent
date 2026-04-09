@@ -26,7 +26,7 @@ class Settings(BaseModel):
     sec_user_agent: str | None = Field(default=None)
     sec_api_key: str | None = Field(default=None)
     ingestion_lookback_hours: int = Field(default=24)
-    email_provider: str = Field(default="brevo")
+    email_provider: str = Field(default="resend")
     email_api_key: str | None = Field(default=None)
     brevo_api_key: str | None = Field(default=None)
     resend_api_key: str | None = Field(default=None)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +21,7 @@ from backend.app.services.digest.digest_service import generate_morning_digest
 from backend.app.services.email.brevo_provider import BrevoEmailProvider
 from backend.app.services.email.email_service import _get_email_provider, send_digest_email
 from backend.app.services.email.resend_provider import ResendEmailProvider
+from backend.scripts.run_daily_brief import _find_sent_digest_for_business_date
 from backend.app.services.scheduler.scheduler_service import is_scheduler_running, shutdown_scheduler, start_scheduler_if_enabled
 
 
@@ -203,6 +205,18 @@ def test_preserved_resend_path_is_selectable() -> None:
     assert isinstance(provider, ResendEmailProvider)
 
 
+def test_provider_selection_uses_resend_default() -> None:
+    settings = Settings(
+        email_from="digest@example.com",
+        resend_api_key="resend-key",
+        digest_recipients=["alice@example.com"],
+    )
+
+    provider = _get_email_provider(settings)
+
+    assert isinstance(provider, ResendEmailProvider)
+
+
 def test_successful_brevo_send_path(monkeypatch: pytest.MonkeyPatch) -> None:
     class DummyResponse:
         def __enter__(self) -> "DummyResponse":
@@ -235,6 +249,32 @@ def test_successful_brevo_send_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["provider"] == "brevo"
     assert result["status"] == "sent"
     assert result["message_id"] == "brevo-message-123"
+
+
+def test_duplicate_daily_send_is_detected_for_business_date(db_session: Session) -> None:
+    watchlist_id, digest_id = _seed_watchlist_and_cluster(db_session)
+    digest = db_session.get(Digest, digest_id)
+    assert digest is not None
+
+    pacific = ZoneInfo("America/Los_Angeles")
+    sent_at_pacific = datetime.now(pacific).replace(hour=6, minute=5, second=0, microsecond=0)
+    digest.sent_at = sent_at_pacific.astimezone(UTC)
+    digest.delivery_status = "sent"
+    db_session.add(digest)
+    db_session.commit()
+
+    settings = Settings(
+        email_provider="resend",
+        resend_api_key="resend-key",
+        email_from="digest@example.com",
+        digest_recipients=["alice@example.com"],
+        digest_timezone="America/Los_Angeles",
+    )
+
+    sent_digest = _find_sent_digest_for_business_date(db_session, watchlist_id, settings)
+
+    assert sent_digest is not None
+    assert sent_digest.id == digest_id
 
 
 def test_manual_morning_run_endpoint_executes_end_to_end(client: TestClient, db_session: Session) -> None:
