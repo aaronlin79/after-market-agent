@@ -22,7 +22,6 @@ from backend.app.services.observability.pipeline_tracker import complete_pipelin
 from backend.app.services.ranking.ranking_service import rank_clusters
 from backend.app.services.summarization.cluster_summary_service import generate_cluster_summaries
 from backend.app.services import watchlist_service
-from backend.scripts.seed_watchlist import seed_default_watchlist
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +34,13 @@ def main() -> None:
     settings = get_settings()
     _ensure_sqlite_directory(settings.database_url)
     _validate_settings(settings)
+    logger.info(
+        "Daily brief configuration database=%s watchlist_target=%s news_provider=%s email_provider=%s",
+        _describe_database_url(settings.database_url),
+        settings.scheduled_watchlist_id,
+        settings.news_provider,
+        settings.email_provider,
+    )
 
     db = SessionLocal()
     trigger_type = _resolve_trigger_type()
@@ -205,29 +211,50 @@ def _find_sent_digest_for_business_date(db, watchlist_id: int, settings: Setting
 
 
 def _resolve_watchlist_id(db, settings: Settings) -> int:
+    logger.info(
+        "Resolving scheduled watchlist target_id=%s database=%s",
+        settings.scheduled_watchlist_id,
+        _describe_database_url(settings.database_url),
+    )
     watchlist = db.execute(select(Watchlist).where(Watchlist.id == settings.scheduled_watchlist_id)).scalar_one_or_none()
-
-    if watchlist is None:
+    if watchlist is not None:
         logger.info(
-            "Watchlist id=%s was not found. Seeding the default watchlist for headless execution.",
-            settings.scheduled_watchlist_id,
+            "Resolved watchlist directly by id watchlist_id=%s name=%s",
+            watchlist.id,
+            watchlist.name,
         )
-        seed_default_watchlist(db)
-        watchlist = watchlist_service.get_watchlist_by_name(db, settings.default_watchlist_name)
-
-    if watchlist is None:
-        raise RuntimeError("No watchlist is available for the daily brief run.")
+    else:
+        available_watchlists = list(db.execute(select(Watchlist).order_by(Watchlist.id.asc())).scalars())
+        logger.warning(
+            "Configured watchlist was not found target_id=%s available_watchlists=%s fallback_seeding_triggered=false",
+            settings.scheduled_watchlist_id,
+            [{"id": item.id, "name": item.name} for item in available_watchlists],
+        )
+        if len(available_watchlists) == 1:
+            watchlist = available_watchlists[0]
+            logger.warning(
+                "Using the only persisted watchlist instead of seeding a default watchlist watchlist_id=%s name=%s",
+                watchlist.id,
+                watchlist.name,
+            )
+        else:
+            raise RuntimeError(
+                "Scheduled watchlist was not found and no unambiguous persisted watchlist is available. "
+                "Set SCHEDULED_WATCHLIST_ID to an existing watchlist id in the active database."
+            )
 
     hydrated_watchlist = watchlist_service.get_watchlist(db, watchlist.id)
     if not hydrated_watchlist.symbols:
-        if hydrated_watchlist.name == settings.default_watchlist_name:
-            logger.info("Default watchlist has no symbols. Seeding default symbols.")
-            seed_default_watchlist(db)
-            hydrated_watchlist = watchlist_service.get_watchlist(db, watchlist.id)
-        if not hydrated_watchlist.symbols:
-            raise RuntimeError(
-                f"Watchlist {hydrated_watchlist.id} has no symbols. Add symbols before running the daily brief."
-            )
+        raise RuntimeError(
+            f"Watchlist {hydrated_watchlist.id} has no symbols. Add symbols before running the daily brief."
+        )
+
+    logger.info(
+        "Final watchlist selection watchlist_id=%s name=%s symbols=%s",
+        hydrated_watchlist.id,
+        hydrated_watchlist.name,
+        [symbol.symbol for symbol in hydrated_watchlist.symbols],
+    )
 
     return hydrated_watchlist.id
 
@@ -245,6 +272,19 @@ def _ensure_sqlite_directory(database_url: str) -> None:
         sqlite_path = Path.cwd() / sqlite_path
 
     sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _describe_database_url(database_url: str) -> str:
+    if database_url.startswith("sqlite:///"):
+        path_value = database_url.removeprefix("sqlite:///")
+        sqlite_path = Path(path_value)
+        if not sqlite_path.is_absolute():
+            sqlite_path = (Path.cwd() / sqlite_path).resolve()
+        return f"sqlite:///{sqlite_path}"
+    if "://" not in database_url:
+        return "<unknown>"
+    scheme = database_url.split("://", 1)[0]
+    return f"{scheme}://<redacted>"
 
 
 if __name__ == "__main__":
