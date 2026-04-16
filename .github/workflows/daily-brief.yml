@@ -3,10 +3,11 @@ name: Daily Brief
 on:
   workflow_dispatch:
   schedule:
-    # Primary slot for the 6:00 AM PT delivery window during PDT.
+    # GitHub Actions cron is UTC-only. 13:00 UTC maps to 6:00 AM during PDT,
+    # which lands inside the 5:30-6:30 AM America/Los_Angeles gate window.
+    # This single-cron setup avoids duplicate daily runs, but it is PDT-only;
+    # during PST it will fire at 5:00 AM local and the gate step will skip it.
     - cron: "0 13 * * *"
-    # Fallback slot for the 6:00 AM PT delivery window during PST.
-    - cron: "0 14 * * *"
 
 permissions:
   contents: read
