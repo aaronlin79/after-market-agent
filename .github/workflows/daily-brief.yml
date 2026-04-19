@@ -3,11 +3,9 @@ name: Daily Brief
 on:
   workflow_dispatch:
   schedule:
-    # GitHub Actions cron is UTC-only. 13:00 UTC maps to 6:00 AM during PDT,
-    # which lands inside the 5:30-6:30 AM America/Los_Angeles gate window.
-    # This single-cron setup avoids duplicate daily runs, but it is PDT-only;
-    # during PST it will fire at 5:00 AM local and the gate step will skip it.
-    - cron: "0 13 * * *"
+    # GitHub Actions cron is UTC-only. 12:00 UTC maps to 5:00 AM in Los Angeles during PDT.
+    # This is a fixed UTC schedule, so it will shift during PST.
+    - cron: "0 12 * * *"
 
 permissions:
   contents: read
@@ -30,7 +28,7 @@ jobs:
       INGESTION_LOOKBACK_HOURS: "24"
       EMAIL_PROVIDER: resend
       DIGEST_TIMEZONE: America/Los_Angeles
-      DIGEST_SEND_HOUR: "6"
+      DIGEST_SEND_HOUR: "5"
       ENABLE_SCHEDULER: "false"
       SCHEDULED_WATCHLIST_ID: "1"
       OPENAI_MODEL_SUMMARY: gpt-5-mini
@@ -60,38 +58,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Gate scheduled runs to the 5:30-6:30 AM America/Los_Angeles send window
-        id: schedule_gate
-        shell: bash
-        run: |
-          utc_now="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          pt_now="$(TZ=America/Los_Angeles date '+%Y-%m-%d %H:%M:%S %Z')"
-          pt_hour="$(TZ=America/Los_Angeles date +%H)"
-          pt_minute="$(TZ=America/Los_Angeles date +%M)"
-          pt_total_minutes="$((10#${pt_hour} * 60 + 10#${pt_minute}))"
-          window_start=330
-          window_end=390
-
-          echo "Current UTC time: ${utc_now}"
-          echo "Current America/Los_Angeles time: ${pt_now}"
-
-          if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
-            if [ "${pt_total_minutes}" -lt "${window_start}" ] || [ "${pt_total_minutes}" -gt "${window_end}" ]; then
-              echo "outside_window=true" >> "${GITHUB_OUTPUT}"
-              echo "should_run=false" >> "${GITHUB_OUTPUT}"
-              echo "Scheduled run is outside the 5:30-6:30 AM PT send window. Skipping."
-              exit 0
-            fi
-            echo "outside_window=false" >> "${GITHUB_OUTPUT}"
-            echo "should_run=true" >> "${GITHUB_OUTPUT}"
-            echo "Scheduled run is inside the 5:30-6:30 AM PT send window. Continuing."
-          else
-            echo "outside_window=false" >> "${GITHUB_OUTPUT}"
-            echo "should_run=true" >> "${GITHUB_OUTPUT}"
-            echo "Manual run detected. Bypassing the time-window gate."
-          fi
       - name: Validate required secrets and environment
-        if: steps.schedule_gate.outputs.should_run == 'true'
         shell: bash
         run: |
           required_vars=(
@@ -110,8 +77,8 @@ jobs:
             fi
           done
 
-          if [ "${DIGEST_SEND_HOUR}" != "6" ]; then
-            echo "DIGEST_SEND_HOUR must be 6. Current value: ${DIGEST_SEND_HOUR}"
+          if [ "${DIGEST_SEND_HOUR}" != "5" ]; then
+            echo "DIGEST_SEND_HOUR must be 5. Current value: ${DIGEST_SEND_HOUR}"
             exit 1
           fi
 
@@ -133,21 +100,18 @@ jobs:
           echo "Environment validation passed."
 
       - name: Install Python dependencies
-        if: steps.schedule_gate.outputs.should_run == 'true'
         shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install .
 
       - name: Run database migrations
-        if: steps.schedule_gate.outputs.should_run == 'true'
         shell: bash
         run: |
           echo "Running migrations against ${DATABASE_URL}"
           alembic -c alembic.ini upgrade head
 
       - name: Execute daily brief
-        if: steps.schedule_gate.outputs.should_run == 'true'
         shell: bash
         run: |
           echo "Running daily brief with NEWS_PROVIDER=${NEWS_PROVIDER}, EMAIL_PROVIDER=${EMAIL_PROVIDER}, DIGEST_TIMEZONE=${DIGEST_TIMEZONE}, DIGEST_SEND_HOUR=${DIGEST_SEND_HOUR}"
